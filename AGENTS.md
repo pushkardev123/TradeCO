@@ -38,7 +38,7 @@ The backend is the authoritative command gateway. The event service must not acc
 - This project is testnet-only. Do not add production trading endpoints unless the tracker explicitly scopes that work.
 - Never commit secrets, API keys, refresh tokens, signatures, `.env` files, or generated credential material.
 - Treat Binance Testnet API keys as secrets even though they are testnet credentials.
-- Remove existing hardcoded Binance keys and module import side effects before building on top of exchange code.
+- Do not reintroduce hardcoded Binance keys or module import side effects in exchange code.
 - User identity must come from verified access tokens. Do not trust `userId` supplied by frontend request bodies, query params, or WebSocket messages.
 - Users bring their own Binance Testnet API keys during signup/onboarding. Store exchange credentials encrypted in a separate `ExchangeCredential` model, not directly on `User`.
 - Authentication target is short-lived JWT access tokens plus opaque rotating refresh tokens.
@@ -187,10 +187,9 @@ Each PR should include:
 
 Address these early in the execution plan:
 
-- Hardcoded Binance Testnet credentials and import-time exchange calls in backend exchange code.
+- Cleared baseline: hardcoded Binance Testnet credentials and import-time exchange calls were removed from backend exchange code. Keep this regression from coming back.
 - Public routes that trust client-supplied `userId`.
 - Token/user identity persisted in frontend `localStorage`.
 - Event service acting as an unauthenticated order ingress.
 - Deprecated Binance listen-key stream usage.
 - Float-based handling of prices, quantities, balances, or notional values.
-
