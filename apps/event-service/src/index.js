@@ -1,6 +1,7 @@
 import http from "http";
 import { WebSocketServer } from "ws";
 import { createClient } from "redis";
+import jwt from "jsonwebtoken";
 import "dotenv/config";
 
 const PORT = process.env.PORT || 8081;
@@ -10,6 +11,7 @@ const ORDERS_CHANNEL = process.env.ORDERS_CHANNEL || "commands:order:submit";
 const PRICES_CHANNEL = process.env.PRICES_CHANNEL || "events:price:update";
 
 const BALANCES_CHANNEL = process.env.BALANCES_CHANNEL || "events:account:balances";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Charts (candlesticks / klines)
 const CHART_REQ_CHANNEL = process.env.CHART_REQ_CHANNEL || "events:chart:request";
@@ -30,9 +32,6 @@ let redisPub = null;
 // Pending RPC-style requests waiting for execution-service responses
 const pending = new Map(); // id -> { resolve, reject, timeout }
 
-// Pending order ACK waiters (orderId -> { resolve, reject, timeout })
-const pendingAcks = new Map();
-
 // In-memory cache for account snapshot per user
 const accountCache = new Map(); // userId -> { ts, data }
 
@@ -52,17 +51,6 @@ function accountCacheSet(userId, data) {
     accountCache.set(key, { ts: Date.now(), data });
 }
 
-function waitForOrderAck(orderId, timeoutMs = 8000) {
-    const oid = String(orderId || "");
-    return new Promise((resolve, reject) => {
-        if (!oid) return reject(new Error("orderId missing"));
-        const timeout = setTimeout(() => {
-            pendingAcks.delete(oid);
-            reject(new Error("order ack timeout"));
-        }, timeoutMs);
-        pendingAcks.set(oid, { resolve, reject, timeout });
-    });
-}
 
 async function requestAccountInfo({ userId, pinnedAssets = [], timeoutMs = 8000 }) {
     const uid = String(userId || "");
@@ -147,6 +135,53 @@ async function requestSymbolInfo(symbol, timeoutMs = 6000) {
     return { fromCache: false, data };
 }
 
+
+function sendJson(res, status, body) {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(body));
+}
+
+function getBearerToken(req) {
+    const header = String(req.headers.authorization || "");
+    const [type, token] = header.split(" ");
+    if (type !== "Bearer" || !token) return null;
+    return token;
+}
+
+function verifyAccessToken(token) {
+    if (!JWT_SECRET) {
+        const err = new Error("JWT_SECRET missing");
+        err.statusCode = 503;
+        throw err;
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const id = decoded?.userId || decoded?.id || decoded?.sub;
+    if (!id) {
+        const err = new Error("Token missing user identity");
+        err.statusCode = 401;
+        throw err;
+    }
+
+    return { id: String(id), email: decoded?.email || null };
+}
+
+function requireHttpUser(req, res) {
+    const token = getBearerToken(req);
+    if (!token) {
+        sendJson(res, 401, { ok: false, error: "Missing Bearer token" });
+        return null;
+    }
+
+    try {
+        return verifyAccessToken(token);
+    } catch (e) {
+        const status = e?.statusCode || 401;
+        sendJson(res, status, { ok: false, error: status === 503 ? "JWT_SECRET missing" : "Invalid/expired token" });
+        return null;
+    }
+}
+
 function setCors(res) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -210,23 +245,20 @@ const server = http.createServer(async (req, res) => {
         );
         return;
     }
-    // Frontend -> event-service: fetch account balances (pinned + nonZero)
-    // Example: /account-info?userId=abc&pinned=BTC,ETH,USDT
+    // Frontend -> event-service: fetch account balances (pinned + nonZero).
+    // User scope comes from the verified access token; userId query params are ignored.
     if (req.url?.startsWith("/account-info") && req.method === "GET") {
+        const user = requireHttpUser(req, res);
+        if (!user) return;
+
         try {
             const u = new URL(req.url, `http://localhost:${PORT}`);
-            const userId = String(u.searchParams.get("userId") || "");
             const pinnedParam = String(u.searchParams.get("pinned") || "");
             const pinnedAssets = pinnedParam
                 ? pinnedParam.split(",").map((s) => s.trim()).filter(Boolean)
                 : [];
 
-            if (!userId) {
-                res.writeHead(400, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: false, error: "userId query param is required" }));
-            }
-
-            const out = await requestAccountInfo({ userId, pinnedAssets, timeoutMs: 8000 });
+            const out = await requestAccountInfo({ userId: user.id, pinnedAssets, timeoutMs: 8000 });
             res.writeHead(200, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: true, fromCache: out.fromCache, data: out.data }));
         } catch (e) {
@@ -324,116 +356,10 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
-    // Frontend -> Event-service: create an order command
+    // Order submission belongs to the authenticated backend command gateway.
+    // Do not accept client-supplied userId or order ingress in the realtime service.
     if (req.url === "/orders" && req.method === "POST") {
-        try {
-            const body = await readJson(req);
-
-            // minimal validation
-            const symbol = String(body?.symbol || "").toUpperCase();
-            const side = String(body?.side || "").toUpperCase();
-            const quantity = Number(body?.quantity);
-            const orderType = String(body?.orderType || "LIMIT").toUpperCase();
-            const userId = String(body?.userId || "");
-
-            if (!symbol) {
-                res.writeHead(400, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: false, error: "symbol is required" }));
-            }
-            if (side !== "BUY" && side !== "SELL") {
-                res.writeHead(400, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: false, error: "side must be BUY or SELL" }));
-            }
-            if (!Number.isFinite(quantity) || quantity <= 0) {
-                res.writeHead(400, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: false, error: "quantity must be > 0" }));
-            }
-            if (!userId) {
-                res.writeHead(400, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: false, error: "userId is required" }));
-            }
-
-            if (orderType === "LIMIT") {
-                const price = Number(body?.price);
-                if (!Number.isFinite(price) || price <= 0) {
-                    res.writeHead(400, { "Content-Type": "application/json" });
-                    return res.end(JSON.stringify({ ok: false, error: "LIMIT requires a valid price" }));
-                }
-            }
-
-            // UI uses STOP_MARKET; execution-service maps it to Binance Spot STOP_LOSS.
-            // Also accept Binance-style names directly if the frontend ever sends them.
-            if (orderType === "STOP_MARKET" || orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT") {
-                const stopPrice = Number(body?.stopPrice);
-                if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
-                    res.writeHead(400, { "Content-Type": "application/json" });
-                    return res.end(JSON.stringify({ ok: false, error: `${orderType} requires a valid stopPrice` }));
-                }
-            }
-
-            // Stop-limit variants require BOTH stopPrice and price + timeInForce
-            if (orderType === "STOP_LOSS_LIMIT" || orderType === "TAKE_PROFIT_LIMIT") {
-                const stopPrice = Number(body?.stopPrice);
-                const price = Number(body?.price);
-                const tif = String(body?.timeInForce || "").toUpperCase();
-
-                if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
-                    res.writeHead(400, { "Content-Type": "application/json" });
-                    return res.end(JSON.stringify({ ok: false, error: `${orderType} requires a valid stopPrice` }));
-                }
-                if (!Number.isFinite(price) || price <= 0) {
-                    res.writeHead(400, { "Content-Type": "application/json" });
-                    return res.end(JSON.stringify({ ok: false, error: `${orderType} requires a valid price` }));
-                }
-                if (!tif) {
-                    res.writeHead(400, { "Content-Type": "application/json" });
-                    return res.end(JSON.stringify({ ok: false, error: `${orderType} requires timeInForce` }));
-                }
-            }
-
-            const event = {
-                type: "ORDER_CREATED",
-                userId,
-                // prefer client provided orderId/id, else generate
-                orderId:
-                    body?.orderId ||
-                    body?.id ||
-                    `ord-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-                symbol,
-                side,
-                quantity,
-                orderType,
-                price: body?.price,
-                // Optional fields used by execution-service/Binance
-                stopPrice: body?.stopPrice,
-                timeInForce: body?.timeInForce,
-
-                meta: body?.meta || {},
-                ts: Date.now(),
-            };
-
-            if (!redisPub) {
-                res.writeHead(503, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: false, error: "redis publisher not ready" }));
-            }
-
-            const payload = JSON.stringify(event);
-            await redisPub.publish(ORDERS_CHANNEL, payload);
-
-            // Wait for execution-service to publish ORDER_ACK / ORDER_REJECTED on EVENTS_CHANNEL
-            try {
-                const ack = await waitForOrderAck(event.orderId, 8000);
-                res.writeHead(200, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: true, ack }));
-            } catch (e) {
-                res.writeHead(504, { "Content-Type": "application/json" });
-                return res.end(JSON.stringify({ ok: false, error: e?.message || "ack timeout" }));
-            }
-        } catch (e) {
-            console.error("[event-service] /orders error:", e);
-            res.writeHead(500, { "Content-Type": "application/json" });
-            return res.end(JSON.stringify({ ok: false, error: "internal error" }));
-        }
+        return sendJson(res, 410, { ok: false, error: "Submit orders through the backend API" });
     }
 
     res.writeHead(404);
@@ -445,11 +371,25 @@ const wss = new WebSocketServer({ noServer: true });
 // Track live clients
 const clients = new Set();
 
-// Only accept WS upgrades on /prices
+// Only accept WS upgrades on /prices. Token is optional for public market data,
+// but scoped order/account updates are delivered only when it verifies.
 server.on("upgrade", (req, socket, head) => {
-    if (req.url !== "/prices") return socket.destroy();
+    const u = new URL(req.url || "/", `http://localhost:${PORT}`);
+    if (u.pathname !== "/prices") return socket.destroy();
+
+    let user = null;
+    const token = u.searchParams.get("token");
+    if (token) {
+        try {
+            user = verifyAccessToken(token);
+        } catch {
+            socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+            return socket.destroy();
+        }
+    }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.user = user;
         wss.emit("connection", ws, req);
     });
 });
@@ -461,10 +401,10 @@ wss.on("connection", (ws) => {
         JSON.stringify({
             type: "HELLO",
             message: "connected to /prices",
-            note: "Broadcasting Redis order events + price updates to all WS clients",
+            authenticated: Boolean(ws.user),
+            note: "Broadcasting public market data; scoped order/account updates require a verified token",
             channels: {
                 orders: EVENTS_CHANNEL,
-                commands: ORDERS_CHANNEL,
                 prices: PRICES_CHANNEL,
                 balances: BALANCES_CHANNEL,
                 chartsRequest: CHART_REQ_CHANNEL,
@@ -484,13 +424,39 @@ wss.on("connection", (ws) => {
     });
 });
 
-function broadcast(raw) {
+function getMessageUserId(message) {
+    try {
+        let payload = JSON.parse(message);
+        if (typeof payload === "string") payload = JSON.parse(payload);
+        return payload?.userId ? String(payload.userId) : null;
+    } catch {
+        return null;
+    }
+}
+
+function isScopedChannel(channel) {
+    return channel === EVENTS_CHANNEL || channel === BALANCES_CHANNEL || channel === ACCOUNT_RES_CHANNEL;
+}
+
+function broadcast(channel, message) {
+    const scopedUserId = getMessageUserId(message);
+    if (isScopedChannel(channel) && !scopedUserId) return;
+
+    const raw = JSON.stringify({
+        type: "REDIS_EVENT",
+        channel,
+        message,
+        ts: Date.now(),
+    });
+
     for (const ws of clients) {
-        if (ws.readyState === 1) {
-            ws.send(raw);
-        } else {
+        if (ws.readyState !== 1) {
             clients.delete(ws);
+            continue;
         }
+
+        if (scopedUserId && ws.user?.id !== scopedUserId) continue;
+        ws.send(raw);
     }
 }
 
@@ -506,35 +472,10 @@ async function startRedisSubscriber() {
     console.log(`[event-service] redis connected: ${REDIS_URL}`);
 
     const forward = (channel, message) => {
-        broadcast(
-            JSON.stringify({
-                type: "REDIS_EVENT",
-                channel,
-                message,
-                ts: Date.now(),
-            })
-        );
+        broadcast(channel, message);
     };
 
-    await sub.subscribe(EVENTS_CHANNEL, (message) => {
-        // 1) Resolve /orders ACK waiters
-        try {
-            const payload = JSON.parse(message);
-            const t = String(payload?.type || "");
-            const orderId = payload?.orderId;
-
-            if ((t === "ORDER_ACK" || t === "ORDER_REJECTED") && orderId && pendingAcks.has(String(orderId))) {
-                const p = pendingAcks.get(String(orderId));
-                clearTimeout(p.timeout);
-                pendingAcks.delete(String(orderId));
-                p.resolve(payload);
-            }
-        } catch {
-            // ignore
-        }
-
-        forward(EVENTS_CHANNEL, message);
-    });
+    await sub.subscribe(EVENTS_CHANNEL, (message) => forward(EVENTS_CHANNEL, message));
     await sub.subscribe(PRICES_CHANNEL, (message) => forward(PRICES_CHANNEL, message));
     await sub.subscribe(CHARTS_CHANNEL, (message) => forward(CHARTS_CHANNEL, message));
     await sub.subscribe(BALANCES_CHANNEL, (message) => forward(BALANCES_CHANNEL, message));
@@ -630,11 +571,6 @@ async function startRedisSubscriber() {
                 clearTimeout(p.timeout);
                 pending.delete(id);
             }
-            for (const [oid, p] of pendingAcks) {
-                clearTimeout(p.timeout);
-                pendingAcks.delete(oid);
-            }
-
             if (redisSub) await redisSub.quit();
             if (redisPub) await redisPub.quit();
         } finally {

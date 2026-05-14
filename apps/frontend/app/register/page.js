@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import Image from "next/image"; // Assuming you want to show the logo like the main app
-import { setToken, decodeToken } from "../lib/auth";
+import { setToken } from "../lib/auth";
 import Link from "next/link";
 import "dotenv/config";
 
@@ -81,10 +81,6 @@ export default function SignupPage() {
             }
 
             setToken(data.token);
-            const decoded = decodeToken();
-            const userId = decoded?.userId || decoded?.id || decoded?.sub || null;
-            if (userId) localStorage.setItem("userId", String(userId));
-
             router.push("/trade");
         } catch (err) {
             setServerMsg("Something went wrong. Please try again.");

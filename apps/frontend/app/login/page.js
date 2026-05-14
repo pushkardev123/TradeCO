@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import Image from "next/image";
-import { setToken, decodeToken } from "../lib/auth";
+import { setToken } from "../lib/auth";
 import "dotenv/config";
 
 const loginSchema = z.object({
@@ -58,10 +58,6 @@ export default function LoginPage() {
             }
 
             setToken(data.token);
-            const decoded = decodeToken();
-            const userId = decoded?.userId || decoded?.id || decoded?.sub || null;
-            if (userId) localStorage.setItem("userId", String(userId));
-
             router.push("/trade");
         } catch (err) {
             setServerMsg("Something went wrong. Please try again.");

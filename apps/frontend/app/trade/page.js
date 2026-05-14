@@ -14,7 +14,7 @@ import {
 import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
 import { CgProfile } from "react-icons/cg";
 
-import { getToken, getUserId } from "../lib/auth";
+import { getToken } from "../lib/auth";
 import "dotenv/config";
 
 const inter = Inter({
@@ -24,7 +24,6 @@ const inter = Inter({
 
 export default function TradePage() {
     const router = useRouter();
-    const userIdRef = useRef(null);
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [status, setStatus] = useState("CONNECTING");
     const [apiMsg, setApiMsg] = useState("");
@@ -141,9 +140,7 @@ export default function TradePage() {
 
     useEffect(() => {
         const token = getToken();
-        const userId = getUserId();
-        userIdRef.current = userId;
-        if (!token || !userId) {
+        if (!token) {
             router.push("/login");
             return;
         }
@@ -163,7 +160,9 @@ export default function TradePage() {
         const connect = () => {
             if (cancelled) return;
 
-            const url = `${wsBaseUrl}/prices`;
+            const token = getToken();
+            const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+            const url = `${wsBaseUrl}/prices${tokenParam}`;
             try {
                 ws = new WebSocket(url);
             } catch {
@@ -981,7 +980,8 @@ export default function TradePage() {
     }, [selectedSymbol, chartInterval]);
 
     async function placeOrder() {
-        if (!userIdRef.current) {
+        const token = getToken();
+        if (!token) {
             setApiMsg("Not authenticated. Please login again.");
             router.push("/login");
             return;
@@ -1046,7 +1046,6 @@ export default function TradePage() {
         try {
             const payload = {
                 orderId: clientOrderId,
-                userId: userIdRef.current,
                 symbol: String(selectedSymbol || "").toUpperCase(),
                 side: String(side || "").toUpperCase(),
                 orderType: String(orderType || "MARKET").toUpperCase(),
@@ -1064,10 +1063,11 @@ export default function TradePage() {
                 payload.stopPrice = stopPriceNum;
             }
 
-            const res = await fetch(`${eventBaseUrl}/orders`, {
+            const res = await fetch(`${apiBaseUrl}/orders`, {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
                 },
                 body: JSON.stringify(payload),
             });
