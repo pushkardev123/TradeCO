@@ -508,13 +508,16 @@ export async function rejectOrder({ prisma, pub, eventsChannel, command, reason 
         },
     });
 
-    await pub.publish(eventsChannel, JSON.stringify({
-        orderId: command.orderId,
-        userId: command.userId,
+    await publishOrderStatusEvent({
+        pub,
+        eventsChannel,
+        command,
         status: "REJECTED",
+        price: null,
+        quantity: command.quantity,
         reason,
-        timestamp: now.toISOString(),
-    }));
+        submittedAt: now,
+    });
 }
 
 async function markCancelPending({ prisma, command, existing, status }) {

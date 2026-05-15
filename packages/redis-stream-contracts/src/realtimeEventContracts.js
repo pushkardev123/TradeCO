@@ -49,42 +49,46 @@ const ORDER_STATUSES = new Set([
 const SIDES = new Set(["BUY", "SELL"]);
 const DECIMAL_STRING_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
-export function validateRealtimeChannelPayload(channel, payload) {
+export function validateRealtimeChannelPayload(channel, payload, options = {}) {
     const errors = [];
+    const channels = getRealtimeChannelConfigFromOptions(options);
+    const channelRole = getChannelRole(channel, channels);
+    const scopedChannels = getScopedChannels(channels);
+
     if (!isPlainObject(payload)) {
         return ["payload must be an object"];
     }
 
-    if (SCOPED_REALTIME_CHANNELS.includes(channel)) {
+    if (scopedChannels.includes(channel)) {
         requireNonEmptyString(payload.userId, "userId", errors);
     }
 
-    switch (channel) {
-        case REALTIME_CHANNELS.orders:
+    switch (channelRole) {
+        case "orders":
             validateOrderStatusEvent(payload, errors);
             break;
-        case REALTIME_CHANNELS.balances:
+        case "balances":
             validateAccountBalancesEvent(payload, errors);
             break;
-        case REALTIME_CHANNELS.accountRequest:
-            validateAccountInfoRequest(payload, errors);
+        case "accountRequest":
+            validateAccountInfoRequest(payload, errors, channels);
             break;
-        case REALTIME_CHANNELS.accountResponse:
+        case "accountResponse":
             validateAccountInfoResponse(payload, errors);
             break;
-        case REALTIME_CHANNELS.symbolRequest:
-            validateSymbolInfoRequest(payload, errors);
+        case "symbolRequest":
+            validateSymbolInfoRequest(payload, errors, channels);
             break;
-        case REALTIME_CHANNELS.symbolResponse:
+        case "symbolResponse":
             validateSymbolInfoResponse(payload, errors);
             break;
-        case REALTIME_CHANNELS.prices:
+        case "prices":
             validatePriceEvent(payload, errors);
             break;
-        case REALTIME_CHANNELS.chartsRequest:
+        case "chartsRequest":
             validateChartRequest(payload, errors);
             break;
-        case REALTIME_CHANNELS.charts:
+        case "charts":
             validateChartEvent(payload, errors);
             break;
         default:
@@ -94,26 +98,27 @@ export function validateRealtimeChannelPayload(channel, payload) {
     return errors;
 }
 
-export function assertRealtimeChannelPayload(channel, payload) {
-    const errors = validateRealtimeChannelPayload(channel, payload);
+export function assertRealtimeChannelPayload(channel, payload, options = {}) {
+    const errors = validateRealtimeChannelPayload(channel, payload, options);
     if (errors.length > 0) {
         throw new Error(errors.join("; "));
     }
     return true;
 }
 
-export function validateWebSocketRedisEnvelope(envelope) {
+export function validateWebSocketRedisEnvelope(envelope, options = {}) {
     const errors = [];
+    const channels = getRealtimeChannelConfigFromOptions(options);
     if (!isPlainObject(envelope)) return ["envelope must be an object"];
     if (envelope.type !== REALTIME_EVENT_TYPES.redisEnvelope) errors.push(`type must be ${REALTIME_EVENT_TYPES.redisEnvelope}`);
-    if (!Object.values(REALTIME_CHANNELS).includes(envelope.channel)) errors.push("channel must be a known realtime channel");
+    if (!Object.values(channels).includes(envelope.channel)) errors.push("channel must be a known realtime channel");
     if (typeof envelope.message !== "string") errors.push("message must be a JSON string");
     if (!isFiniteNumber(envelope.ts)) errors.push("ts must be a number");
 
-    if (typeof envelope.message === "string" && Object.values(REALTIME_CHANNELS).includes(envelope.channel)) {
+    if (typeof envelope.message === "string" && Object.values(channels).includes(envelope.channel)) {
         try {
             const inner = JSON.parse(envelope.message);
-            errors.push(...validateRealtimeChannelPayload(envelope.channel, inner).map((error) => `message.${error}`));
+            errors.push(...validateRealtimeChannelPayload(envelope.channel, inner, { channels }).map((error) => `message.${error}`));
         } catch {
             errors.push("message must parse as JSON");
         }
@@ -170,12 +175,12 @@ function validateAccountBalancesEvent(payload, errors) {
     });
 }
 
-function validateAccountInfoRequest(payload, errors) {
+function validateAccountInfoRequest(payload, errors, channels) {
     if (payload.type !== REALTIME_EVENT_TYPES.accountInfoRequest) errors.push(`type must be ${REALTIME_EVENT_TYPES.accountInfoRequest}`);
     requireNonEmptyString(payload.id, "id", errors);
     requireNonEmptyString(payload.userId, "userId", errors);
-    if (payload.replyTo !== undefined && payload.replyTo !== REALTIME_CHANNELS.accountResponse) {
-        errors.push(`replyTo must be ${REALTIME_CHANNELS.accountResponse}`);
+    if (payload.replyTo !== undefined && payload.replyTo !== channels.accountResponse) {
+        errors.push(`replyTo must be ${channels.accountResponse}`);
     }
     if (payload.pinnedAssets !== undefined && !Array.isArray(payload.pinnedAssets)) {
         errors.push("pinnedAssets must be an array when present");
@@ -191,12 +196,12 @@ function validateAccountInfoResponse(payload, errors) {
     if (payload.ok === false) requireNonEmptyString(payload.error, "error", errors);
 }
 
-function validateSymbolInfoRequest(payload, errors) {
+function validateSymbolInfoRequest(payload, errors, channels) {
     if (payload.type !== REALTIME_EVENT_TYPES.symbolInfoRequest) errors.push(`type must be ${REALTIME_EVENT_TYPES.symbolInfoRequest}`);
     requireNonEmptyString(payload.id, "id", errors);
     requireNonEmptyString(payload.symbol, "symbol", errors);
-    if (payload.replyTo !== undefined && payload.replyTo !== REALTIME_CHANNELS.symbolResponse) {
-        errors.push(`replyTo must be ${REALTIME_CHANNELS.symbolResponse}`);
+    if (payload.replyTo !== undefined && payload.replyTo !== channels.symbolResponse) {
+        errors.push(`replyTo must be ${channels.symbolResponse}`);
     }
 }
 
@@ -318,6 +323,18 @@ function isFiniteNumber(value) {
 
 function isPlainObject(value) {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function getRealtimeChannelConfigFromOptions(options = {}) {
+    return options?.channels || REALTIME_CHANNELS;
+}
+
+function getChannelRole(channel, channels) {
+    return Object.entries(channels).find(([, value]) => value === channel)?.[0] || null;
+}
+
+function getScopedChannels(channels) {
+    return [channels.orders, channels.balances, channels.accountResponse].filter(Boolean);
 }
 
 function readOptionalEnv(env, name) {

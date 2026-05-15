@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 03:09 IST
+Last updated: 2026-05-16 03:17 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `86eeb2e` (`Add execution reconciliation worker`)
+- Current pushed commit: `431455d` (`Add realtime event contract tests`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -28,6 +28,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `9ce4698` | Extract Binance client module | Centralized Binance Spot Testnet REST client, signing, safe errors, rate-limit metadata, execution-service refactor. |
 | `b7d62b0` | Replace Float math with Decimal/string-safe trading values | Prisma Decimal migration, normalized decimal string service boundaries, Decimal-safe execution/account/position math, full compose verification. |
 | `86eeb2e` | Add order and account reconciliation worker | Stale order reconciliation, signed Binance read methods, account snapshot publishing, deterministic tests, compose verification. |
+| `431455d` | Add event contract tests | Shared realtime channel/payload contract tests for Redis Pub/Sub and WebSocket envelopes. |
 
 ## Working Rules
 
@@ -81,7 +82,7 @@ This sequence will be reconciled against Notion before each item starts.
 
 ## Active Task Log
 
-### Active: Replace Float math with Decimal/string-safe trading values
+### Completed: Replace Float math with Decimal/string-safe trading values
 
 - Notion page: `3608ea2b-3f8a-817f-b54b-fd5355b59976`
 - Status at start: `Not started`, `P0`, high risk.
@@ -109,7 +110,7 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
   - `npm run smoke:p0-auth-boundary`: pass.
 
-### Active: Add order and account reconciliation worker
+### Completed: Add order and account reconciliation worker
 
 - Notion page: `3608ea2b-3f8a-8135-8894-c8b5736c4939`
 - Status at start: `Not started`, `P1`, medium risk.
@@ -134,7 +135,7 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
   - `npm run smoke:p0-auth-boundary`: pass.
 
-### Active: Add event contract tests
+### Completed: Add event contract tests
 
 - Notion page: `3608ea2b-3f8a-81c1-a0c8-e2f203dba901`
 - Status at start: `Not started`, `P1`, medium risk.
@@ -150,5 +151,32 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm --workspace apps/event-service run test`: pass.
   - `npm --workspace apps/execution-service run test`: pass.
   - `node --check packages/redis-stream-contracts/src/realtimeEventContracts.js`: pass.
+  - `npm run smoke:p0-auth-boundary`: pass.
+  - `git diff --check`: pass.
+
+### Active: Broadcast scoped order and account events
+
+- Notion page: `3608ea2b-3f8a-8174-9ad7-db072df78a2e`
+- Status at start: `Not started`, `P1`, medium risk.
+- Branch: `main`
+- Started: 2026-05-16 03:10 IST
+- Goal: harden event-service broadcasts so private order/account Redis messages are contract-validated and delivered only as scoped, authenticated WebSocket events.
+- Implementation:
+  - Added event-service dependency on shared Redis/WebSocket realtime contracts.
+  - Added `broadcastContracts` helper and tests to validate scoped Redis payloads and emitted WebSocket envelopes.
+  - Updated event-service fanout to reject invalid/private payload shapes before broadcasting.
+  - Extended contract validation to support runtime channel overrides from environment variables.
+  - Updated execution-service order rejection publishing to emit the full order status event shape expected by the realtime contract.
+- Verification:
+  - `npm run test:stream-contracts`: pass.
+  - `npm --workspace apps/event-service run test`: pass.
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `node --check apps/event-service/src/index.js`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml config --quiet`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build`: pass.
+  - Event-service Docker logs show successful startup and Redis subscriptions.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
   - `npm run smoke:p0-auth-boundary`: pass.
   - `git diff --check`: pass.

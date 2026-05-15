@@ -1,6 +1,7 @@
 import http from "http";
 import { WebSocketServer } from "ws";
 import { createClient } from "redis";
+import { getRealtimeChannelConfig } from "@tradeco/redis-stream-contracts";
 import { config, getCorsAllowOrigin, logStartupConfig, redactUrl, safeErrorMessage } from "./config.js";
 import {
     canReceiveBroadcast,
@@ -10,6 +11,10 @@ import {
     shouldBroadcastChannelMessage,
     verifyAccessToken,
 } from "./auth.js";
+import {
+    createRedisWebSocketEnvelope,
+    validateBroadcastMessage,
+} from "./broadcastContracts.js";
 
 const PORT = config.port;
 const REDIS_URL = config.redisUrl;
@@ -33,6 +38,7 @@ const ACCOUNT_CACHE_MS = config.accountCacheMs;
 const SYMBOL_REQ_CHANNEL = config.symbolReqChannel;
 const SYMBOL_RES_CHANNEL = config.symbolResChannel;
 const SYMBOL_CACHE_MS = config.symbolCacheMs;
+const REALTIME_CHANNELS = getRealtimeChannelConfig(process.env);
 
 let redisPub = null;
 
@@ -444,16 +450,24 @@ wss.on("connection", (ws) => {
     });
 });
 
-const SCOPED_CHANNELS = [EVENTS_CHANNEL, BALANCES_CHANNEL, ACCOUNT_RES_CHANNEL];
+const SCOPED_CHANNELS = [REALTIME_CHANNELS.orders, REALTIME_CHANNELS.balances, REALTIME_CHANNELS.accountResponse];
 
 function broadcast(channel, message) {
+    const validation = validateBroadcastMessage({ channel, message, channels: REALTIME_CHANNELS });
+    if (!validation.ok) {
+        console.warn("[event-service] rejected invalid realtime payload", {
+            channel,
+            errors: validation.errors,
+        });
+        return;
+    }
+
     if (!shouldBroadcastChannelMessage({ channel, message, scopedChannels: SCOPED_CHANNELS })) return;
 
-    const raw = JSON.stringify({
-        type: "REDIS_EVENT",
+    const raw = createRedisWebSocketEnvelope({
         channel,
         message,
-        ts: Date.now(),
+        channels: REALTIME_CHANNELS,
     });
 
     for (const ws of clients) {
