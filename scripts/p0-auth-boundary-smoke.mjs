@@ -11,6 +11,7 @@ function read(path) {
 
 const frontendTrade = read("apps/frontend/app/trade/page.js");
 const frontendAuth = read("apps/frontend/app/lib/auth.js");
+const frontendLogout = read("apps/frontend/app/logout/page.js");
 const backendIndex = read("apps/backend/src/index.js");
 const backendMiddleware = read("apps/backend/src/middleware.js");
 const eventService = read("apps/event-service/src/index.js");
@@ -23,6 +24,9 @@ assert.doesNotMatch(frontendTrade, /events:account:update/);
 assert.match(frontendTrade, /\/account-info/);
 assert.doesNotMatch(frontendTrade, /userId\s*:/);
 assert.doesNotMatch(frontendAuth, /localStorage\.(?:getItem|setItem)\(\s*["']userId["']/);
+assert.doesNotMatch(frontendAuth, /localStorage\.(?:getItem|setItem)\(\s*["']token["']/);
+assert.match(frontendAuth, /let accessToken = null/);
+assert.doesNotMatch(frontendLogout, /localStorage\.clear|sessionStorage\.clear/);
 
 assert.match(backendMiddleware, /verifyAccessToken\(token\)/);
 assert.match(backendMiddleware, /req\.user = \{ id: decoded\.sub, email: decoded\.email \|\| null, sessionId: decoded\.sid \}/);

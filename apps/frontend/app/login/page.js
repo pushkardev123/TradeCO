@@ -4,8 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import Image from "next/image";
-import { setToken } from "../lib/auth";
-import "dotenv/config";
+import { login } from "../lib/auth";
 
 const loginSchema = z.object({
     email: z.string().email("Enter a valid email address"),
@@ -35,7 +34,7 @@ export default function LoginPage() {
         const parsed = loginSchema.safeParse(form);
         if (!parsed.success) {
             const fieldErrors = {};
-            parsed.error.errors.forEach((err) => {
+            parsed.error.issues.forEach((err) => {
                 fieldErrors[err.path[0]] = err.message;
             });
             setErrors(fieldErrors);
@@ -44,23 +43,10 @@ export default function LoginPage() {
 
         try {
             setLoading(true);
-            const baseUrl = (process.env.NEXT_PUBLIC_BACKEND_URL).replace(/\/$/, "");
-            const res = await fetch(`${baseUrl}/auth/login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(form),
-            });
-
-            const data = await res.json();
-            if (!data.ok) {
-                setServerMsg(data.error || "Login failed");
-                return;
-            }
-
-            setToken(data.token);
+            await login(form);
             router.push("/trade");
         } catch (err) {
-            setServerMsg("Something went wrong. Please try again.");
+            setServerMsg(err?.message || "Something went wrong. Please try again.");
         } finally {
             setLoading(false);
         }

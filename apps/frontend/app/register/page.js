@@ -3,10 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
-import Image from "next/image"; // Assuming you want to show the logo like the main app
-import { setToken } from "../lib/auth";
+import Image from "next/image";
+import { register } from "../lib/auth";
 import Link from "next/link";
-import "dotenv/config";
 
 // Signup schema: email + password + Binance keys
 const signupSchema = z
@@ -62,28 +61,15 @@ export default function SignupPage() {
 
         try {
             setLoading(true);
-            const baseUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080").replace(/\/$/, "");
-            const res = await fetch(`${baseUrl}/auth/register`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    email: form.email,
-                    password: form.password,
-                    binanceApiKey: form.binanceApiKey,
-                    binanceSecretKey: form.binanceSecretKey,
-                }),
+            await register({
+                email: form.email,
+                password: form.password,
+                binanceApiKey: form.binanceApiKey,
+                binanceSecretKey: form.binanceSecretKey,
             });
-
-            const data = await res.json();
-            if (!data.ok) {
-                setServerMsg(data.error || "Sign up failed");
-                return;
-            }
-
-            setToken(data.token);
             router.push("/trade");
         } catch (err) {
-            setServerMsg("Something went wrong. Please try again.");
+            setServerMsg(err?.message || "Something went wrong. Please try again.");
         } finally {
             setLoading(false);
         }

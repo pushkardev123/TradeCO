@@ -14,8 +14,7 @@ import {
 import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
 import { CgProfile } from "react-icons/cg";
 
-import { getToken } from "../lib/auth";
-import "dotenv/config";
+import { authFetch, bootstrapSession, clearAuth, ensureAccessToken } from "../lib/auth";
 
 const PRICE_CHANNEL = "events:price:update";
 const ORDER_STATUS_CHANNEL = "events:order:status";
@@ -35,6 +34,8 @@ export default function TradePage() {
     const [isPlacingOrder, setIsPlacingOrder] = useState(false);
     const [pendingOrderId, setPendingOrderId] = useState(null);
     const [toast, setToast] = useState({ open: false, title: "", message: "", status: "" });
+    const [authReady, setAuthReady] = useState(false);
+    const [authUser, setAuthUser] = useState(null);
 
     // orderId -> latest order status event
     const [ordersById, setOrdersById] = useState({});
@@ -142,32 +143,59 @@ export default function TradePage() {
         eventBaseUrl.replace(/^https?:\/\//, (m) => (m === "https://" ? "wss://" : "ws://"))
     ).replace(/\/$/, "");
     const apiBaseUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace(/\/$/, "");
+    const pricesWsUrl = wsBaseUrl.endsWith("/prices") ? wsBaseUrl : `${wsBaseUrl}/prices`;
 
     useEffect(() => {
-        const token = getToken();
-        if (!token) {
-            router.push("/login");
-            return;
-        }
+        let cancelled = false;
 
-        // Initial balances fetch (account snapshot)
+        bootstrapSession()
+            .then((context) => {
+                if (cancelled) return;
+                setAuthUser(context?.user || null);
+                setAuthReady(true);
+            })
+            .catch(() => {
+                clearAuth();
+                if (!cancelled) router.replace("/login");
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [router]);
+
+    useEffect(() => {
+        if (!authReady) return;
         fetchBalances();
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [authReady]);
 
     const [wsMsgCount, setWsMsgCount] = useState(0);
 
     useEffect(() => {
+        if (!authReady) return;
+
         let ws;
         let retryTimer;
         let cancelled = false;
         let attempt = 0;
 
-        const connect = () => {
+        const connect = async () => {
             if (cancelled) return;
 
-            const token = getToken();
-            const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
-            const url = `${wsBaseUrl}/prices${tokenParam}`;
+            let token;
+            try {
+                token = await ensureAccessToken();
+            } catch {
+                setStatus("AUTH_ERROR");
+                clearAuth();
+                router.replace("/login");
+                return;
+            }
+
+            const tokenParam = token ? `token=${encodeURIComponent(token)}` : "";
+            const separator = pricesWsUrl.includes("?") ? "&" : "?";
+            const url = tokenParam ? `${pricesWsUrl}${separator}${tokenParam}` : pricesWsUrl;
             try {
                 ws = new WebSocket(url);
             } catch {
@@ -443,7 +471,7 @@ export default function TradePage() {
                 ws?.close();
             } catch { }
         };
-    }, [wsBaseUrl, MAX_SYMBOLS, pendingOrderId]);
+    }, [authReady, pricesWsUrl, MAX_SYMBOLS, pendingOrderId, router]);
 
     useEffect(() => {
         try {
@@ -481,6 +509,7 @@ export default function TradePage() {
     }, []);
 
     useEffect(() => {
+        if (!authReady) return;
         if (activeTab === "orders") {
             fetchOrdersPage(ordersCursor);
             return;
@@ -490,14 +519,22 @@ export default function TradePage() {
             return;
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeTab, ordersCursor, positionsCursor]);
-    async function fetchPositionsPage(cursor = null) {
-        const token = getToken();
-        if (!token) {
-            router.push("/login");
-            return;
-        }
+    }, [authReady, activeTab, ordersCursor, positionsCursor]);
 
+    function handleAuthFailure(error) {
+        if (error?.status !== 401) return false;
+        clearAuth();
+        router.replace("/login");
+        return true;
+    }
+
+    function buildResponseError(json, res, fallback) {
+        const err = new Error(json?.error || fallback || `Request failed (${res.status})`);
+        err.status = res.status;
+        return err;
+    }
+
+    async function fetchPositionsPage(cursor = null) {
         setPositionsLoading(true);
         setPositionsError("");
 
@@ -506,18 +543,17 @@ export default function TradePage() {
             qs.set("limit", String(POSITIONS_PAGE_SIZE));
             if (cursor) qs.set("cursor", String(cursor));
 
-            const res = await fetch(`${apiBaseUrl}/positions?${qs.toString()}`, {
+            const res = await authFetch(`${apiBaseUrl}/positions?${qs.toString()}`, {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
                 },
                 cache: "no-store",
             });
 
             const json = await res.json().catch(() => ({}));
             if (!res.ok || json?.ok === false) {
-                throw new Error(json?.error || `Failed to fetch positions (${res.status})`);
+                throw buildResponseError(json, res, `Failed to fetch positions (${res.status})`);
             }
 
             const items = Array.isArray(json?.items)
@@ -539,6 +575,7 @@ export default function TradePage() {
             if (Number.isFinite(te)) setPositionsTotalEntries(te);
             if (Number.isFinite(tp) && tp > 0) setPositionsTotalPages(tp);
         } catch (e) {
+            if (handleAuthFailure(e)) return;
             setPositionsError(e?.message || "Failed to fetch positions");
             setPositionsPage([]);
             setPositionsNextCursor(null);
@@ -745,12 +782,6 @@ export default function TradePage() {
     }
 
     async function fetchOrdersPage(cursor = null) {
-        const token = getToken();
-        if (!token) {
-            router.push("/login");
-            return;
-        }
-
         setOrdersLoading(true);
         setOrdersError("");
 
@@ -759,18 +790,17 @@ export default function TradePage() {
             qs.set("limit", String(ORDERS_PAGE_SIZE));
             if (cursor) qs.set("cursor", String(cursor)); // orderId cursor
 
-            const res = await fetch(`${apiBaseUrl}/orders?${qs.toString()}`, {
+            const res = await authFetch(`${apiBaseUrl}/orders?${qs.toString()}`, {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
                 },
                 cache: "no-store",
             });
 
             const json = await res.json().catch(() => ({}));
             if (!res.ok || json?.ok === false) {
-                throw new Error(json?.error || `Failed to fetch orders (${res.status})`);
+                throw buildResponseError(json, res, `Failed to fetch orders (${res.status})`);
             }
 
             // Expect: { ok: true, items: [...], nextCursor: "..." }
@@ -793,6 +823,7 @@ export default function TradePage() {
             if (Number.isFinite(te)) setOrdersTotalEntries(te);
             if (Number.isFinite(tp) && tp > 0) setOrdersTotalPages(tp);
         } catch (e) {
+            if (handleAuthFailure(e)) return;
             setOrdersError(e?.message || "Failed to fetch orders");
             setOrdersPage([]);
             setOrdersNextCursor(null);
@@ -804,12 +835,6 @@ export default function TradePage() {
     }
 
     async function fetchBalances() {
-        const token = getToken();
-        if (!token) {
-            router.push("/login");
-            return;
-        }
-
         setBalancesLoading(true);
         setBalancesError("");
 
@@ -819,18 +844,17 @@ export default function TradePage() {
             if (pinnedAssets.length) qs.set("pinned", pinnedAssets.join(","));
             const query = qs.toString();
 
-            const res = await fetch(`${eventBaseUrl}/account-info${query ? `?${query}` : ""}`, {
+            const res = await authFetch(`${eventBaseUrl}/account-info${query ? `?${query}` : ""}`, {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
                 },
                 cache: "no-store",
             });
 
             const json = await res.json().catch(() => ({}));
             if (!res.ok || json?.ok === false) {
-                throw new Error(json?.error || `Failed to fetch balances (${res.status})`);
+                throw buildResponseError(json, res, `Failed to fetch balances (${res.status})`);
             }
 
             const balanceGroups = [
@@ -857,6 +881,7 @@ export default function TradePage() {
             setBalances(Array.from(byAsset.values()));
             setBalancesUpdatedAt(Date.now());
         } catch (e) {
+            if (handleAuthFailure(e)) return;
             setBalances([]);
             setBalancesError(e?.message || "Failed to fetch balances");
         } finally {
@@ -995,12 +1020,6 @@ export default function TradePage() {
     }, [selectedSymbol, chartInterval]);
 
     async function placeOrder() {
-        const token = getToken();
-        if (!token) {
-            setApiMsg("Not authenticated. Please login again.");
-            router.push("/login");
-            return;
-        }
         setApiMsg("");
         setFormErrors({});
         if (isPlacingOrder) return;
@@ -1078,11 +1097,10 @@ export default function TradePage() {
                 payload.stopPrice = stopPriceNum;
             }
 
-            const res = await fetch(`${apiBaseUrl}/orders`, {
+            const res = await authFetch(`${apiBaseUrl}/orders`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
                 },
                 body: JSON.stringify(payload),
             });
@@ -1090,6 +1108,12 @@ export default function TradePage() {
             const data = await res.json();
             console.log("Place order response:", data);
             if (!res.ok || !data.ok) {
+                if (res.status === 401) {
+                    setIsPlacingOrder(false);
+                    clearAuth();
+                    router.replace("/login");
+                    return;
+                }
                 setIsPlacingOrder(false);
                 setApiMsg(data.error || "Order failed");
                 return;
@@ -1097,6 +1121,10 @@ export default function TradePage() {
 
             setApiMsg("Order sent. Waiting for status...");
         } catch (e) {
+            if (handleAuthFailure(e)) {
+                setIsPlacingOrder(false);
+                return;
+            }
             setIsPlacingOrder(false);
             setApiMsg("Network error");
         }
@@ -1144,6 +1172,13 @@ export default function TradePage() {
                 ? stopPrice
                 : limitPrice;
 
+    if (!authReady) {
+        return (
+            <main className={`${inter.className} min-h-screen w-full flex items-center justify-center bg-[#09090b] text-neutral-200`}>
+                <div className="text-sm text-neutral-400">Checking session...</div>
+            </main>
+        );
+    }
 
     return (
         <main className={`${inter.className} min-h-screen w-full overflow-x-hidden transition-colors duration-200 ${isDark ? "bg-[#09090b] text-neutral-200" : "bg-[#f5f5f5] text-neutral-900"}`}>
@@ -1201,7 +1236,7 @@ export default function TradePage() {
                                     <div className="p-1.5 space-y-0.5">
                                         {/* Header / User Info (Optional) */}
                                         <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${isDark ? "text-neutral-500" : "text-neutral-400"}`}>
-                                            My Account
+                                            {authUser?.email || "My Account"}
                                         </div>
 
                                         {/* Edit Details */}
