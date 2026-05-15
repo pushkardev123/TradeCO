@@ -54,6 +54,12 @@ Current implementation note:
 
 - Backend order request derives user identity from the verified access token.
 - Redis Stream entries use `order.submit.requested.v1`, `schemaVersion: 1`, and decimal strings for quantity, price, and stop price.
+- Local Redis Stream smoke passes:
+
+  ```sh
+  npm run smoke:p2-redis-stream
+  ```
+
 - Event service does not accept public order placement commands.
 - Order command and latest order event share the expected `orderId` and `userId`.
 - Logs do not contain API keys, signed URLs, JWTs, refresh tokens, or decrypted credential values.
@@ -84,12 +90,34 @@ Idempotency keys:
 
 Dead-letter message type: `order.command.dead_lettered.v1`.
 
-## Pending Redis Streams Runtime Procedure
+## Redis Streams Runtime Procedure
 
-Complete this section after a live Redis-backed smoke test confirms the stream consumer behavior with local infrastructure.
+Use these steps after `npm run smoke:p2-redis-stream` passes against the same Redis environment.
 
-- How to inspect pending messages with Redis stream commands.
-- How to safely replay or dead-letter a stuck command without duplicating a Binance order.
-- Idempotency checks before retrying a command.
+Inspect the consumer group:
 
-Do not use Redis stream consumer-group recovery commands in incidents until live Redis smoke coverage is documented.
+```sh
+redis-cli XINFO GROUPS tradeco:orders:commands:v1
+redis-cli XPENDING tradeco:orders:commands:v1 tradeco:execution:orders:v1
+```
+
+Inspect pending message details:
+
+```sh
+redis-cli XPENDING tradeco:orders:commands:v1 tradeco:execution:orders:v1 - + 10
+```
+
+Inspect dead-lettered messages:
+
+```sh
+redis-cli XRANGE tradeco:orders:commands:dlq:v1 - + COUNT 10
+```
+
+Before retrying a stuck command:
+
+- Confirm the `orderId` in `OrderCommand`.
+- Confirm the command is not already `SUBMITTED`, `PARTIALLY_FILLED`, or `FILLED`.
+- Confirm there is no `binanceOrderId` for that `orderId`.
+- Keep `LEGACY_COMMANDS_CHANNEL_ENABLED=false` unless this is an explicit rollback.
+
+Only replay or manually acknowledge messages after those idempotency checks are complete.

@@ -90,3 +90,13 @@ curl http://localhost:8081/health
 ```
 
 The health and startup output redact connection credentials and never print JWT secrets, encryption keys, Binance user API keys, refresh tokens, or signatures.
+
+## 7. Redis Stream smoke check
+
+With local Redis running, verify the order stream mechanics without Binance credentials:
+
+```sh
+npm run smoke:p2-redis-stream
+```
+
+This uses isolated smoke stream names, verifies a valid command is consumed and acknowledged, verifies an invalid command is acknowledged into the DLQ, and deletes the smoke streams before exiting.

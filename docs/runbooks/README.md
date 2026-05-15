@@ -17,7 +17,7 @@ No real credentials belong in this directory. Testnet keys, JWTs, refresh tokens
 | [Binance Testnet Reset Handling](binance-testnet-reset.md) | Initial structure; partially complete | Execution service owner | Respond when Binance Spot Testnet resets data, invalidates keys, or changes expected testnet state. |
 | [Local Setup Verification](local-setup-verification.md) | Initial structure; mostly complete | Service owner running the environment | Bring up local services and verify without leaking secrets. |
 | [Service Recovery](service-recovery.md) | Initial structure; local recovery complete, production pending | Service owner on call | Recover frontend, backend, event service, and execution service. |
-| [Order Command Processing and Redis Streams](order-command-processing-and-redis-streams.md) | Backend producer and execution consumer implemented; live Redis recovery docs pending | Backend and execution owners | Diagnose command processing and Redis Stream stuck-message handling. |
+| [Order Command Processing and Redis Streams](order-command-processing-and-redis-streams.md) | Backend producer, execution consumer, local Redis smoke, and recovery commands documented | Backend and execution owners | Diagnose command processing and Redis Stream stuck-message handling. |
 | [Deployment Rollback](deployment-rollback.md) | Initial structure; deployment-specific commands pending | Release owner | Roll back a bad deploy once deployment tooling is documented. |
 
 ## Runbook Standard
