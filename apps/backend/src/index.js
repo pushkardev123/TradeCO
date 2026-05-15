@@ -18,10 +18,18 @@ import {
 } from "./authService.js";
 import { clearRefreshCookie, getRefreshTokenFromRequest, setRefreshCookie } from "./cookies.js";
 import { getDecryptedExchangeCredential } from "./credentials.js";
+import {
+    appendOrderSubmitStreamEntry,
+    createOrderSubmitDraftFromRequest,
+    getRequestIdFromHeaders,
+    isSameOrderIntent,
+    shouldRetryStreamAppend,
+} from "./orderStreamProducer.js";
 
 const PORT = config.port;
 const REDIS_URL = config.redisUrl;
 const COMMANDS_CHANNEL = config.commandsChannel;
+const ORDER_COMMAND_STREAM = config.orderCommandStream;
 
 const prisma = new PrismaClient();
 
@@ -246,90 +254,119 @@ app.post("/orders", requireAuth, async (req, res) => {
         if (rejectClientUserId(req, res)) return;
 
         const body = req.body || {};
-        const symbol = String(body.symbol || "").toUpperCase();
-        const side = String(body.side || "").toUpperCase();
-        const quantity = Number(body.quantity);
-        const orderType = String(body.orderType || "MARKET").toUpperCase();
-
-        if (!symbol) {
-            return res.status(400).json({ ok: false, error: "symbol is required" });
-        }
-        if (side !== "BUY" && side !== "SELL") {
-            return res.status(400).json({ ok: false, error: "side must be BUY or SELL" });
-        }
-        if (!Number.isFinite(quantity) || quantity <= 0) {
-            return res.status(400).json({ ok: false, error: "quantity must be > 0" });
-        }
-
-        if (orderType === "LIMIT") {
-            const price = Number(body.price);
-            if (!Number.isFinite(price) || price <= 0) {
-                return res.status(400).json({ ok: false, error: "LIMIT requires a valid price" });
-            }
-        }
-
-        if (orderType === "STOP_MARKET" || orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT") {
-            const stopPrice = Number(body.stopPrice);
-            if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
-                return res.status(400).json({ ok: false, error: `${orderType} requires a valid stopPrice` });
-            }
-        }
-
-        if (orderType === "STOP_LOSS_LIMIT" || orderType === "TAKE_PROFIT_LIMIT") {
-            const stopPrice = Number(body.stopPrice);
-            const price = Number(body.price);
-            const timeInForce = String(body.timeInForce || "").toUpperCase();
-
-            if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
-                return res.status(400).json({ ok: false, error: `${orderType} requires a valid stopPrice` });
-            }
-            if (!Number.isFinite(price) || price <= 0) {
-                return res.status(400).json({ ok: false, error: `${orderType} requires a valid price` });
-            }
-            if (!timeInForce) {
-                return res.status(400).json({ ok: false, error: `${orderType} requires timeInForce` });
-            }
-        }
-
         const orderId = String(body.orderId || body.id || randomUUID());
+        const orderDraft = createOrderSubmitDraftFromRequest({
+            body,
+            userId: req.user.id,
+            orderId,
+            requestId: getRequestIdFromHeaders(req.headers),
+        });
         const command = {
             type: "ORDER_CREATED",
             orderId,
             userId: req.user.id,
-            symbol,
-            side,
-            quantity,
-            orderType,
-            price: body.price,
-            stopPrice: body.stopPrice,
-            timeInForce: body.timeInForce,
-            meta: body.meta || {},
-            ts: Date.now(),
+            symbol: orderDraft.symbol,
+            side: orderDraft.side,
+            quantity: orderDraft.quantity,
+            orderType: orderDraft.orderType,
+            price: orderDraft.price,
+            stopPrice: orderDraft.stopPrice,
+            timeInForce: orderDraft.timeInForce,
+            ts: Date.parse(orderDraft.createdAt) || Date.now(),
         };
 
-        await prisma.orderCommand.create({
-            data: {
-                userId: req.user.id,
-                orderId,
-                symbol,
-                side,
-                type: orderType,
-                quantity,
-                price: body.price === undefined || body.price === null || body.price === "" ? null : Number(body.price),
-                stopPrice: body.stopPrice === undefined || body.stopPrice === null || body.stopPrice === "" ? null : Number(body.stopPrice),
-                timeInForce: body.timeInForce ? String(body.timeInForce).toUpperCase() : null,
-                status: "RECEIVED",
-            },
-        });
+        let persistedCommand;
+        let appendToStream = true;
+
+        try {
+            persistedCommand = await prisma.orderCommand.create({
+                data: {
+                    userId: req.user.id,
+                    orderId,
+                    symbol: orderDraft.symbol,
+                    side: orderDraft.side,
+                    type: orderDraft.orderType,
+                    quantity: Number(orderDraft.quantity),
+                    price: orderDraft.price === undefined ? null : Number(orderDraft.price),
+                    stopPrice: orderDraft.stopPrice === undefined ? null : Number(orderDraft.stopPrice),
+                    timeInForce: orderDraft.timeInForce || null,
+                    status: "RECEIVED",
+                },
+            });
+        } catch (e) {
+            if (e?.code !== "P2002") throw e;
+
+            persistedCommand = await prisma.orderCommand.findUnique({ where: { orderId } });
+
+            if (!isSameOrderIntent(persistedCommand, orderDraft)) {
+                return res.status(409).json({ ok: false, error: "orderId already exists" });
+            }
+
+            appendToStream = shouldRetryStreamAppend(persistedCommand);
+
+            if (!appendToStream) {
+                return res.json({
+                    ok: true,
+                    orderId,
+                    status: persistedCommand.status === "RECEIVED" ? "PENDING" : persistedCommand.status,
+                    idempotent: true,
+                });
+            }
+        }
+
+        try {
+            if (appendToStream) {
+                await appendOrderSubmitStreamEntry({
+                    redis,
+                    streamName: ORDER_COMMAND_STREAM,
+                    streamEntry: orderDraft.streamEntry,
+                });
+            }
+        } catch (e) {
+            console.error("[backend] /orders stream append error:", safeErrorMessage(e));
+            try {
+                await prisma.orderCommand.update({
+                    where: { orderId },
+                    data: {
+                        status: "STREAM_APPEND_FAILED",
+                        errorMsg: "Redis stream append failed",
+                    },
+                });
+            } catch (updateError) {
+                console.error("[backend] /orders stream failure status update error:", safeErrorMessage(updateError));
+            }
+
+            return res.status(503).json({
+                ok: false,
+                error: "Order command persisted but stream append failed",
+            });
+        }
+
+        if (persistedCommand?.status === "STREAM_APPEND_FAILED") {
+            try {
+                await prisma.orderCommand.update({
+                    where: { orderId },
+                    data: {
+                        status: "RECEIVED",
+                        errorMsg: null,
+                    },
+                });
+            } catch (updateError) {
+                console.error("[backend] /orders stream retry status update error:", safeErrorMessage(updateError));
+            }
+        }
 
         await redis.publish(COMMANDS_CHANNEL, JSON.stringify(command));
 
         return res.json({ ok: true, orderId, status: "PENDING" });
     } catch (e) {
+        if (e?.statusCode) {
+            return res.status(e.statusCode).json({ ok: false, error: e.message });
+        }
         if (e?.code === "P2002") {
             return res.status(409).json({ ok: false, error: "orderId already exists" });
         }
-        console.error("[backend] /orders create error:", e);
+        console.error("[backend] /orders create error:", safeErrorMessage(e));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });

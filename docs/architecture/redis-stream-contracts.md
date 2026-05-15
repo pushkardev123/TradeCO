@@ -1,12 +1,12 @@
 # Redis Stream Contracts
 
-Status: Contract committed. Backend and execution runtime migration is pending.
+Status: Contract committed. Backend producer dual-write is implemented; execution stream consumption is pending.
 
 Tracker row: https://www.notion.so/3608ea2b3f8a81c78c7ecd629dd7d34f
 
 ## Scope
 
-This document defines the Redis Streams naming and message envelope for asynchronous order processing. Runtime code may still use the legacy Pub/Sub channel until the migration task lands, but new backend and execution work should import `@tradeco/redis-stream-contracts` instead of hardcoding stream names or field shapes.
+This document defines the Redis Streams naming and message envelope for asynchronous order processing. The backend now imports `@tradeco/redis-stream-contracts` and appends authenticated order submits to the command stream while temporarily dual-writing the legacy Pub/Sub channel for the current execution service.
 
 ## Streams and Groups
 
@@ -70,6 +70,9 @@ Optional fields:
 - The backend must persist `OrderCommand` before appending to the stream.
 - The backend must derive `userId` from the verified access token.
 - The backend must build commands with `buildOrderSubmitStreamEntry`.
+- The backend must read `ORDER_COMMAND_STREAM` through `getOrderStreamConfig`.
+- Duplicate submits must be same-user and same-intent before they are treated as idempotent; a mismatched duplicate `orderId` must not append another stream entry.
+- Until the execution service consumes streams, the backend also publishes the legacy `COMMANDS_CHANNEL` message after a successful stream append.
 - Stream entries must not contain API keys, signatures, JWTs, refresh tokens, or decrypted credential payloads.
 - Decimal trading values must stay as strings from request validation through stream append.
 

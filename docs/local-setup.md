@@ -55,6 +55,7 @@ Important:
 - Use the same 32-character `ENCRYPTION_KEY` in backend and execution-service.
 - Do not put real Binance keys in service env files. Users provide Binance Spot Testnet keys during signup/onboarding.
 - Keep `BINANCE_API_BASE` and `BINANCE_WS_BASE` on the Binance Spot Testnet hosts shown in the examples.
+- Keep the backend `ORDER_COMMAND_STREAM` default unless you intentionally need an isolated local stream. The backend also uses `COMMANDS_CHANNEL` until the execution service stream consumer lands.
 
 ## 4. Prepare Prisma
 

@@ -1,6 +1,6 @@
 # Order Command Processing and Redis Streams
 
-Status: Redis Streams contract committed. Runtime migration is pending because current checked-in code still uses Redis Pub/Sub for command transport.
+Status: Backend Redis Stream producer dual-write is implemented. Execution service stream consumption is still pending, so Pub/Sub remains temporarily required.
 
 Tracker row: https://www.notion.so/3608ea2b3f8a81ff8e58dbde4c5b164a
 
@@ -20,13 +20,15 @@ Frontend -> Backend API -> OrderCommand -> Redis Stream -> Execution Service -> 
 
 Current implementation note:
 
-- Backend `POST /orders` persists `OrderCommand` and publishes JSON to the Redis Pub/Sub channel configured by `COMMANDS_CHANNEL`, defaulting to `commands:order:submit`.
-- Execution service subscribes to that channel and submits orders to Binance Spot Testnet.
+- Backend `POST /orders` persists `OrderCommand`, appends the v1 order submit entry to `ORDER_COMMAND_STREAM`, and then publishes JSON to the Redis Pub/Sub channel configured by `COMMANDS_CHANNEL`, defaulting to `commands:order:submit`.
+- If stream append fails after the database create, backend marks the command `STREAM_APPEND_FAILED` when possible and returns `503`. Do not expect the legacy Pub/Sub publish in that failure path.
+- Duplicate submissions with the same authenticated user, `orderId`, and order intent return the existing command response without appending another stream entry. A duplicate for a command in `STREAM_APPEND_FAILED` retries the stream append.
+- Execution service currently subscribes to the legacy Pub/Sub channel and submits orders to Binance Spot Testnet.
 - Event service rejects public `POST /orders` ingress with `410` and tells callers to use the backend API.
-- Redis Streams consumer group handling is not implemented in the checked-in code yet.
+- Redis Streams consumer group handling is not implemented in the execution service yet.
 - The committed stream contract lives in `packages/redis-stream-contracts` and is documented in [Redis Stream Contracts](../architecture/redis-stream-contracts.md).
 
-## Current Pub/Sub Triage Procedure
+## Current Dual-Write Triage Procedure
 
 1. Confirm backend accepted the command.
    Verify the request used a valid Bearer token and did not rely on frontend-supplied `userId`.
@@ -34,28 +36,32 @@ Current implementation note:
 2. Confirm `OrderCommand` exists.
    Check the backend database for the internal `orderId`, authenticated `userId`, symbol, side, type, quantity, and status. Do not expose credentials while querying.
 
-3. Confirm backend published the command.
-   Review backend logs for `/orders` errors. The current code publishes to `COMMANDS_CHANNEL` after the database create succeeds.
+3. Confirm backend appended the command stream entry.
+   Inspect `ORDER_COMMAND_STREAM`, defaulting to `tradeco:orders:commands:v1`, for an entry with the `orderId` and authenticated `userId`. Backend stream append failures should leave the persisted command in `STREAM_APPEND_FAILED` when the status update succeeds.
 
-4. Confirm execution service is subscribed.
+4. Confirm backend published the temporary legacy command.
+   Review backend logs for `/orders` errors. The Pub/Sub publish happens only after the database create and stream append succeed.
+
+5. Confirm execution service is subscribed.
    Execution service logs should show subscription to `COMMANDS_CHANNEL`.
 
-5. Confirm credential decrypt succeeded.
+6. Confirm credential decrypt succeeded.
    If the command is rejected because credentials cannot load or decrypt, follow [Credential Safety and Testnet Key Rotation](credential-safety-and-key-rotation.md) only when key material is invalid or exposed.
 
-6. Confirm user-scoped event publication.
+7. Confirm user-scoped event publication.
    Execution service publishes order status to `EVENTS_CHANNEL`, defaulting to `events:order:status`. Event service forwards scoped order updates only when the message contains a `userId` matching the authenticated WebSocket client.
 
 ## Verification Checks
 
 - Backend order request derives user identity from the verified access token.
+- Redis Stream entries use `order.submit.requested.v1`, `schemaVersion: 1`, and decimal strings for quantity, price, and stop price.
 - Event service does not accept public order placement commands.
 - Order command and latest order event share the expected `orderId` and `userId`.
 - Logs do not contain API keys, signed URLs, JWTs, refresh tokens, or decrypted credential values.
 
 ## Risks
 
-- Pub/Sub is not durable. If execution service is offline when backend publishes, the command can be lost.
+- The command stream is durable, but execution still depends on Pub/Sub until the stream consumer task lands.
 - Current order quantities and prices use JavaScript numbers and Prisma `Float`; decimal-safe storage is still a priority risk.
 - Current execution service catches and suppresses some persistence errors during command handling; diagnostics can be incomplete.
 
@@ -81,12 +87,11 @@ Dead-letter message type: `order.command.dead_lettered.v1`.
 
 ## Pending Redis Streams Runtime Procedure
 
-Complete this section only after backend and execution services actually use Redis Streams in code.
+Complete this section after the execution service consumes Redis Streams in code.
 
-- How backend appends commands and records stream IDs.
 - How execution service claims, acknowledges, retries, and dead-letters commands.
 - How to inspect pending messages with Redis stream commands.
 - How to safely replay or dead-letter a stuck command without duplicating a Binance order.
 - Idempotency checks before retrying a command.
 
-Do not use Redis stream recovery commands in incidents until the runtime migration is merged and verified.
+Do not use Redis stream consumer-group recovery commands in incidents until the execution runtime migration is merged and verified.

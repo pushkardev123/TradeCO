@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { getOrderStreamConfig } from "@tradeco/redis-stream-contracts";
 
 const SERVICE = "backend";
 const DEFAULT_PORT = 8080;
@@ -135,6 +136,13 @@ const binanceApiBase = validateBinanceTestnetUrl(
 );
 const port = parsePort("PORT", DEFAULT_PORT, errors);
 const corsOrigins = parseCorsOrigins(readEnv("CORS_ORIGIN", DEFAULT_CORS_ORIGIN), errors);
+let orderStreamConfig = null;
+
+try {
+    orderStreamConfig = getOrderStreamConfig(process.env);
+} catch (error) {
+    errors.push(error?.message || "Redis stream configuration is invalid");
+}
 
 if (errors.length > 0) {
     console.error(`[${SERVICE}] Configuration error:`);
@@ -151,6 +159,7 @@ export const config = Object.freeze({
     jwtSecret,
     encryptionKey,
     commandsChannel: readEnv("COMMANDS_CHANNEL", DEFAULT_COMMANDS_CHANNEL),
+    orderCommandStream: orderStreamConfig.streams.commands,
     corsOrigins,
     binanceApiBase,
 });
@@ -167,6 +176,7 @@ export function logStartupConfig() {
         databaseUrl: redactUrl(config.databaseUrl),
         redisUrl: redactUrl(config.redisUrl),
         commandsChannel: config.commandsChannel,
+        orderCommandStream: config.orderCommandStream,
         corsOrigins: config.corsOrigins,
         binanceApiBase: redactUrl(config.binanceApiBase),
     });
