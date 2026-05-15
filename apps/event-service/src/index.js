@@ -2,30 +2,30 @@ import http from "http";
 import { WebSocketServer } from "ws";
 import { createClient } from "redis";
 import jwt from "jsonwebtoken";
-import "dotenv/config";
+import { config, getCorsAllowOrigin, logStartupConfig, redactUrl, safeErrorMessage } from "./config.js";
 
-const PORT = process.env.PORT || 8081;
-const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
-const EVENTS_CHANNEL = process.env.EVENTS_CHANNEL || "events:order:status";
-const ORDERS_CHANNEL = process.env.ORDERS_CHANNEL || "commands:order:submit";
-const PRICES_CHANNEL = process.env.PRICES_CHANNEL || "events:price:update";
+const PORT = config.port;
+const REDIS_URL = config.redisUrl;
+const EVENTS_CHANNEL = config.eventsChannel;
+const ORDERS_CHANNEL = config.ordersChannel;
+const PRICES_CHANNEL = config.pricesChannel;
 
-const BALANCES_CHANNEL = process.env.BALANCES_CHANNEL || "events:account:balances";
-const JWT_SECRET = process.env.JWT_SECRET;
+const BALANCES_CHANNEL = config.balancesChannel;
+const JWT_SECRET = config.jwtSecret;
 
 // Charts (candlesticks / klines)
-const CHART_REQ_CHANNEL = process.env.CHART_REQ_CHANNEL || "events:chart:request";
-const CHARTS_CHANNEL = process.env.CHARTS_CHANNEL || "events:chart:update";
+const CHART_REQ_CHANNEL = config.chartReqChannel;
+const CHARTS_CHANNEL = config.chartsChannel;
 
 // Account info RPC (event-service -> execution-service)
-const ACCOUNT_REQ_CHANNEL = process.env.ACCOUNT_REQ_CHANNEL || "events:account:request";
-const ACCOUNT_RES_CHANNEL = process.env.ACCOUNT_RES_CHANNEL || "events:account:response";
-const ACCOUNT_CACHE_MS = Number(process.env.ACCOUNT_CACHE_MS || 5 * 1000); // 5s
+const ACCOUNT_REQ_CHANNEL = config.accountReqChannel;
+const ACCOUNT_RES_CHANNEL = config.accountResChannel;
+const ACCOUNT_CACHE_MS = config.accountCacheMs;
 
 // Symbol metadata (exchange filters like LOT_SIZE / stepSize / minQty)
-const SYMBOL_REQ_CHANNEL = process.env.SYMBOL_REQ_CHANNEL || "events:symbol:request";
-const SYMBOL_RES_CHANNEL = process.env.SYMBOL_RES_CHANNEL || "events:symbol:response";
-const SYMBOL_CACHE_MS = Number(process.env.SYMBOL_CACHE_MS || 10 * 60 * 1000); // 10 minutes
+const SYMBOL_REQ_CHANNEL = config.symbolReqChannel;
+const SYMBOL_RES_CHANNEL = config.symbolResChannel;
+const SYMBOL_CACHE_MS = config.symbolCacheMs;
 
 let redisPub = null;
 
@@ -149,12 +149,6 @@ function getBearerToken(req) {
 }
 
 function verifyAccessToken(token) {
-    if (!JWT_SECRET) {
-        const err = new Error("JWT_SECRET missing");
-        err.statusCode = 503;
-        throw err;
-    }
-
     const decoded = jwt.verify(token, JWT_SECRET);
     const id = decoded?.userId || decoded?.id || decoded?.sub;
     if (!id) {
@@ -182,8 +176,13 @@ function requireHttpUser(req, res) {
     }
 }
 
-function setCors(res) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+function setCors(req, res) {
+    const origin = String(req.headers.origin || "");
+    const allowOrigin = getCorsAllowOrigin(origin);
+    if (allowOrigin) {
+        res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+        res.setHeader("Vary", "Origin");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
@@ -213,7 +212,7 @@ function readJson(req) {
 
 // --- HTTP server (health + REST endpoints + WS upgrade) ---
 const server = http.createServer(async (req, res) => {
-    setCors(res);
+    setCors(req, res);
 
     // Preflight
     if (req.method === "OPTIONS") {
@@ -227,7 +226,7 @@ const server = http.createServer(async (req, res) => {
             JSON.stringify({
                 ok: true,
                 service: "event-service",
-                redisUrl: REDIS_URL,
+                redisUrl: redactUrl(REDIS_URL),
                 eventsChannel: EVENTS_CHANNEL,
                 ordersChannel: ORDERS_CHANNEL,
                 pricesChannel: PRICES_CHANNEL,
@@ -465,11 +464,11 @@ async function startRedisSubscriber() {
     const sub = createClient({ url: REDIS_URL });
 
     sub.on("error", (err) => {
-        console.error("[event-service] redis error:", err);
+        console.error("[event-service] redis error:", safeErrorMessage(err));
     });
 
     await sub.connect();
-    console.log(`[event-service] redis connected: ${REDIS_URL}`);
+    console.log(`[event-service] redis connected: ${redactUrl(REDIS_URL)}`);
 
     const forward = (channel, message) => {
         broadcast(channel, message);
@@ -536,27 +535,19 @@ async function startRedisSubscriber() {
 
 // --- Boot ---
 (async () => {
+    logStartupConfig();
+
+    redisPub = createClient({ url: REDIS_URL });
+    redisPub.on("error", (err) => console.error("[event-service] redis pub error:", safeErrorMessage(err)));
+    await redisPub.connect();
+    console.log(`[event-service] redis publisher connected: ${redactUrl(REDIS_URL)}`);
+
+    const redisSub = await startRedisSubscriber();
+
     server.listen(PORT, () => {
         console.log(`[event-service] http://localhost:${PORT}`);
         console.log(`[event-service] ws://localhost:${PORT}/prices`);
     });
-
-    try {
-        redisPub = createClient({ url: REDIS_URL });
-        redisPub.on("error", (err) => console.error("[event-service] redis pub error:", err));
-        await redisPub.connect();
-        console.log(`[event-service] redis publisher connected: ${REDIS_URL}`);
-    } catch (e) {
-        console.error("[event-service] failed to start redis publisher:", e);
-    }
-
-    let redisSub = null;
-    try {
-        redisSub = await startRedisSubscriber();
-    } catch (e) {
-        console.error("[event-service] failed to start redis subscriber:", e);
-        console.error("[event-service] Tip: set REDIS_URL env or ensure redis is running on 127.0.0.1:6379");
-    }
 
     const shutdown = async () => {
         try {
@@ -580,4 +571,7 @@ async function startRedisSubscriber() {
 
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
-})();
+})().catch((e) => {
+    console.error("[event-service] fatal:", safeErrorMessage(e));
+    process.exit(1);
+});

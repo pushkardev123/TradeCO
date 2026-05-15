@@ -1,11 +1,7 @@
 import crypto from "crypto";
+import { config } from "./config.js";
 
-const KEY_STR = process.env.ENCRYPTION_KEY;
-if (!KEY_STR || KEY_STR.length !== 32) {
-    throw new Error("ENCRYPTION_KEY must be exactly 32 characters");
-}
-
-const KEY = Buffer.from(KEY_STR, "utf8");
+const KEY = Buffer.from(config.encryptionKey, "utf8");
 
 export function encrypt(plainText) {
     const iv = crypto.randomBytes(12); // GCM standard
