@@ -30,6 +30,43 @@ app.use(express.json());
 const redis = createClient({ url: REDIS_URL });
 redis.on("error", (e) => console.error("[backend] redis error:", e));
 
+function hasUserIdField(value) {
+    return Boolean(
+        value &&
+        typeof value === "object" &&
+        (Object.prototype.hasOwnProperty.call(value, "userId") ||
+            Object.prototype.hasOwnProperty.call(value, "user_id"))
+    );
+}
+
+function getClientUserId(value) {
+    if (!hasUserIdField(value)) return null;
+    return value.userId ?? value.user_id ?? "";
+}
+
+function rejectClientUserId(req, res) {
+    const supplied = [req.query, req.body, req.body?.meta]
+        .map(getClientUserId)
+        .find((value) => value !== null);
+
+    if (supplied === undefined) return false;
+
+    const suppliedUserId = String(supplied || "");
+    if (suppliedUserId && suppliedUserId !== req.user?.id) {
+        res.status(403).json({
+            ok: false,
+            error: "userId does not match the authenticated user",
+        });
+        return true;
+    }
+
+    res.status(403).json({
+        ok: false,
+        error: "userId is derived from the access token and is not accepted in requests",
+    });
+    return true;
+}
+
 app.get("/health", (_req, res) => res.json({ ok: true, service: "backend" }));
 
 // -------- POSITIONS (UI pagination) --------
@@ -37,6 +74,8 @@ app.get("/health", (_req, res) => res.json({ ok: true, service: "backend" }));
 // Response shape expected by frontend: { ok: true, items: [...], nextCursor }
 app.get("/positions", requireAuth, async (req, res) => {
     try {
+        if (rejectClientUserId(req, res)) return;
+
         const limitRaw = Number(req.query?.limit);
         const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, limitRaw)) : 10;
         const cursor = req.query?.cursor ? String(req.query.cursor) : null;
@@ -62,7 +101,6 @@ app.get("/positions", requireAuth, async (req, res) => {
 
         const items = rows.map((p) => ({
             id: p.id,
-            userId: p.userId,
             symbol: p.symbol,
             quantity: p.quantity,
             avgPrice: p.avgPrice,
@@ -90,6 +128,8 @@ app.get("/positions", requireAuth, async (req, res) => {
 // Response shape expected by frontend: { ok: true, items: [...], nextCursor }
 app.get("/orders", requireAuth, async (req, res) => {
     try {
+        if (rejectClientUserId(req, res)) return;
+
         const limitRaw = Number(req.query?.limit);
         const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, limitRaw)) : 10;
         const cursor = req.query?.cursor ? String(req.query.cursor) : null;
@@ -168,6 +208,8 @@ app.get("/orders", requireAuth, async (req, res) => {
 
 app.post("/orders", requireAuth, async (req, res) => {
     try {
+        if (rejectClientUserId(req, res)) return;
+
         const body = req.body || {};
         const symbol = String(body.symbol || "").toUpperCase();
         const side = String(body.side || "").toUpperCase();
@@ -353,6 +395,8 @@ app.post("/auth/login", async (req, res) => {
 
 app.get("/api/trading/positions", requireAuth, async (req, res) => {
     try {
+        if (rejectClientUserId(req, res)) return;
+
         // Pull FILLED events
         const filledEvents = await prisma.orderEvent.findMany({
             where: { userId: req.user.id, status: "FILLED" },
@@ -402,10 +446,12 @@ app.get("/api/trading/positions", requireAuth, async (req, res) => {
 
 // Keep your dev hook if you want (helpful during development)
 if (process.env.NODE_ENV !== "production") {
-    app.post("/dev/publish-test", async (_req, res) => {
+    app.post("/dev/publish-test", requireAuth, async (req, res) => {
+        if (rejectClientUserId(req, res)) return;
+
         const cmd = {
             orderId: randomUUID(),
-            userId: "test-user",
+            userId: req.user.id,
             symbol: "BTCUSDT",
             side: "BUY",
             type: "MARKET",
@@ -420,6 +466,8 @@ if (process.env.NODE_ENV !== "production") {
 
 app.get("/api/trading/account", requireAuth, async (req, res) => {
     try {
+        if (rejectClientUserId(req, res)) return;
+
         // 1) fetch encrypted keys from DB
         const user = await prisma.user.findUnique({
             where: { id: req.user.id },

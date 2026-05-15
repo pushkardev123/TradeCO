@@ -17,6 +17,11 @@ import { CgProfile } from "react-icons/cg";
 import { getToken } from "../lib/auth";
 import "dotenv/config";
 
+const PRICE_CHANNEL = "events:price:update";
+const ORDER_STATUS_CHANNEL = "events:order:status";
+const ACCOUNT_BALANCES_CHANNEL = "events:account:balances";
+const CHARTS_CHANNEL = "events:chart:update";
+
 const inter = Inter({
     subsets: ["latin"],
     weight: ["400", "500", "600", "700"],
@@ -215,7 +220,7 @@ export default function TradePage() {
                     }
 
                     // Price channel
-                    if (channel === "events:price:update") {
+                    if (channel === PRICE_CHANNEL) {
                         if (inner?.type === "MARKET_BOARD" && Array.isArray(inner.data)) {
                             const ts = inner.ts || outer.ts || Date.now();
 
@@ -268,7 +273,7 @@ export default function TradePage() {
                     }
 
                     // Order status channel
-                    if (channel === "events:order:status") {
+                    if (channel === ORDER_STATUS_CHANNEL) {
                         const ev = inner;
                         // execution-service should publish the client order id as `orderId`.
                         // If it publishes it under another key, accept those too.
@@ -321,11 +326,10 @@ export default function TradePage() {
                         }
                     }
 
-                    // Account update channel (execution-service -> redis -> event-service -> WS)
+                    // Account balance channel (execution-service -> Redis -> event-service -> WS)
                     // Expected inner payload shapes:
-                    // - { type: 'ACCOUNT_UPDATE', balances: [...] }
-                    // - or { type: 'BALANCES', items: [...] }
-                    if (channel === "events:account:update") {
+                    // - { type: 'ACCOUNT_BALANCES', balances: [{ asset, free, locked }] }
+                    if (channel === ACCOUNT_BALANCES_CHANNEL) {
                         const items = Array.isArray(inner?.balances)
                             ? inner.balances
                             : Array.isArray(inner?.items)
@@ -350,7 +354,7 @@ export default function TradePage() {
                         return;
                     }
 
-                    if (channel === "events:chart:update") {
+                    if (channel === CHARTS_CHANNEL) {
                         const sym = String(inner?.symbol || "").toUpperCase();
                         const itv = String(inner?.interval || "");
                         if (!sym || sym !== String(selectedSymbolRef.current).toUpperCase()) return;
@@ -810,8 +814,12 @@ export default function TradePage() {
         setBalancesError("");
 
         try {
-            // execution-service API (same auth as /orders, /positions)
-            const res = await fetch(`${apiBaseUrl}/api/trading/account`, {
+            const qs = new URLSearchParams();
+            const pinnedAssets = Array.from(pinned);
+            if (pinnedAssets.length) qs.set("pinned", pinnedAssets.join(","));
+            const query = qs.toString();
+
+            const res = await fetch(`${eventBaseUrl}/account-info${query ? `?${query}` : ""}`, {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
@@ -825,21 +833,28 @@ export default function TradePage() {
                 throw new Error(json?.error || `Failed to fetch balances (${res.status})`);
             }
 
-            const raw = Array.isArray(json?.balances)
-                ? json.balances
-                : Array.isArray(json?.account?.balances)
-                    ? json.account.balances
-                    : [];
+            const balanceGroups = [
+                json?.balances,
+                json?.data?.balances,
+                json?.data?.pinned,
+                json?.data?.nonZero,
+                json?.account?.balances,
+            ].filter(Array.isArray);
 
-            const cleaned = raw
-                .map((b) => ({
-                    asset: String(b.asset || "").toUpperCase(),
-                    free: String(b.free ?? "0"),
-                    locked: String(b.locked ?? "0"),
-                }))
-                .filter((b) => b.asset);
+            const byAsset = new Map();
+            for (const group of balanceGroups) {
+                for (const b of group) {
+                    const asset = String(b.asset || "").toUpperCase();
+                    if (!asset) continue;
+                    byAsset.set(asset, {
+                        asset,
+                        free: String(b.free ?? "0"),
+                        locked: String(b.locked ?? "0"),
+                    });
+                }
+            }
 
-            setBalances(cleaned);
+            setBalances(Array.from(byAsset.values()));
             setBalancesUpdatedAt(Date.now());
         } catch (e) {
             setBalances([]);
@@ -1554,7 +1569,7 @@ export default function TradePage() {
                                                                 const unrealized = (Number.isFinite(mark) && Number.isFinite(entry)) ? (mark - entry) * qtyNum : 0;
 
                                                                 return (
-                                                                    <tr key={p.id || `${p.userId}:${sym}`} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
+                                                                    <tr key={p.id || sym} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
                                                                         <td className="px-5 py-3 font-medium cursor-pointer hover:text-emerald-500" onClick={() => setSelectedSymbol(sym)}>{sym}</td>
                                                                         <td className="px-5 py-3 font-mono text-neutral-500">{trimZeros(qtyNum.toFixed(6))}</td>
                                                                         <td className="px-5 py-3 font-mono">{trimZeros(entry.toFixed(6))}</td>

@@ -9,6 +9,8 @@ const REDIS_URL = process.env.REDIS_URL;
 const COMMANDS_CHANNEL = process.env.COMMANDS_CHANNEL || "commands:order:submit";
 const EVENTS_CHANNEL = process.env.EVENTS_CHANNEL || "events:order:status";
 const PRICES_CHANNEL = process.env.PRICES_CHANNEL || "events:price:update";
+// Canonical account/balance fanout channel. Payload:
+// { type: "ACCOUNT_BALANCES", userId, ts, balances: [{ asset, free, locked }] }
 const BALANCES_CHANNEL = process.env.BALANCES_CHANNEL || "events:account:balances";
 
 // Chart (candlestick / kline) streaming (event-service -> execution-service)

@@ -156,13 +156,12 @@ Authentication Flow
 
 Order Lifecycle (Asynchronous)
 	1.	User places an order from the UI
-	2.	Frontend sends payload to the Event Service
-	3.	Event Service publishes ORDER_COMMAND to Redis
-	4.	Execution Service consumes and executes on Binance
+	2.	Frontend sends the order to the authenticated Backend API
+	3.	Backend validates the JWT, derives user identity from the token, persists the command, and publishes ORDER_COMMAND to Redis
+	4.	Execution Service consumes and executes on Binance Testnet
 	5.	Binance confirms execution
-	6.	Execution Service publishes ORDER_EVENT
-	7.	Backend persists the result in PostgreSQL
-	8.	Event Service pushes updates to the user interface in real time
+	6.	Execution Service persists/fans out ORDER_EVENT updates
+	7.	Event Service pushes scoped updates only to the authenticated user
 
 ⸻
 
@@ -191,13 +190,22 @@ Position	Aggregated holdings per trading symbol
 
 Engineering Notes
 
-Temporary Backend Patch
+Account/Balance Event Contract
 
-Account balance updates are designed to be streamed via Redis events.
+The canonical account balance Redis/WebSocket channel is `events:account:balances`.
 
-Due to time constraints and an unresolved synchronization issue in the event propagation layer, the exact root cause could not be identified during the assignment window. To ensure correctness for the live demo, a temporary backend-side patch was applied to stabilize balance updates.
+Execution Service publishes balance events with this payload shape:
 
-This workaround does not change the core event-driven architecture and is intended to be revisited.
+```json
+{
+  "type": "ACCOUNT_BALANCES",
+  "userId": "authenticated-user-id",
+  "ts": 1710000000000,
+  "balances": [{ "asset": "USDT", "free": "1000.00", "locked": "0" }]
+}
+```
+
+Frontend clients must not send `userId` for account or order authority. Account snapshots are requested through `GET /account-info` on the Event Service with a Bearer token; the Event Service verifies the token and forwards the authenticated user scope internally. Realtime balance updates arrive through `events:account:balances`; `events:account:update` is not part of the contract.
 
 ⸻
 
