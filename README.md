@@ -41,6 +41,10 @@ Numatix is structured as a **monorepo** containing multiple decoupled services:
 
 Each service has a clearly defined responsibility and communicates through events rather than tight coupling.
 
+## Operations Runbooks
+
+Initial operations runbooks live in [docs/runbooks](docs/runbooks/README.md). They cover testnet credential safety, key rotation, testnet reset handling, local setup verification, service recovery, command processing, and rollback structure.
+
 ---
 
 ## Architectural Philosophy
