@@ -459,42 +459,6 @@ app.get("/auth/me", requireAuth, async (req, res) => {
     }
 });
 
-// -------- TRADING (Phase 3 uses this; we can add now) --------
-// This is the real replacement for /dev/publish-test later.
-// It publishes command to Redis, DOES NOT call Binance.
-// app.post("/api/trading/orders", requireAuth, async (req, res) => {
-//     const { symbol, side, type, quantity } = req.body || {};
-//     if (!symbol || !side || !type || !quantity) {
-//         return res.status(400).json({ ok: false, error: "Missing fields" });
-//     }
-
-//     const cmd = {
-//         orderId: randomUUID(),
-//         userId: req.user.id,
-//         symbol,
-//         side,
-//         type,
-//         quantity: String(quantity),
-//         ts: Date.now()
-//     };
-
-//     await prisma.orderCommand.create({
-//         data: {
-//             userId: req.user.id,
-//             orderId: cmd.orderId,
-//             symbol: cmd.symbol,
-//             side: cmd.side,
-//             type: cmd.type,
-//             quantity: Number(cmd.quantity),
-//             status: "RECEIVED",
-//         },
-//     });
-
-//     await redis.publish(COMMANDS_CHANNEL, JSON.stringify(cmd));
-
-//     return res.json({ ok: true, orderId: cmd.orderId, status: "PENDING" });
-// });
-
 app.get("/api/trading/positions", requireAuth, async (req, res) => {
     try {
         if (rejectClientUserId(req, res)) return;
