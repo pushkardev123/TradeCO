@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 03:29 IST
+Last updated: 2026-05-16 03:31 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `352367a` (`Harden scoped realtime broadcasts`)
+- Current pushed commit: `5c5314b` (`Migrate user streams to Binance WebSocket API`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -30,6 +30,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `86eeb2e` | Add order and account reconciliation worker | Stale order reconciliation, signed Binance read methods, account snapshot publishing, deterministic tests, compose verification. |
 | `431455d` | Add event contract tests | Shared realtime channel/payload contract tests for Redis Pub/Sub and WebSocket envelopes. |
 | `352367a` | Broadcast scoped order and account events | Event-service contract-backed private fanout, runtime channel override validation, and full rejected-order realtime payloads. |
+| `5c5314b` | Migrate user data stream to current WebSocket API flow | Binance WebSocket API user stream subscription, signed request helper, reconnect handling, env/deploy docs, and removal of old REST stream-key path. |
 
 ## Working Rules
 
@@ -182,7 +183,7 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p0-auth-boundary`: pass.
   - `git diff --check`: pass.
 
-### Active: Migrate user data stream to current WebSocket API flow
+### Completed: Migrate user data stream to current WebSocket API flow
 
 - Notion page: `3608ea2b-3f8a-81a5-a44a-e440eb7ac721`
 - Status at start: `Not started`, `P0`, high risk.
