@@ -165,6 +165,98 @@ app.get("/orders", requireAuth, async (req, res) => {
     }
 });
 
+
+app.post("/orders", requireAuth, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const symbol = String(body.symbol || "").toUpperCase();
+        const side = String(body.side || "").toUpperCase();
+        const quantity = Number(body.quantity);
+        const orderType = String(body.orderType || "MARKET").toUpperCase();
+
+        if (!symbol) {
+            return res.status(400).json({ ok: false, error: "symbol is required" });
+        }
+        if (side !== "BUY" && side !== "SELL") {
+            return res.status(400).json({ ok: false, error: "side must be BUY or SELL" });
+        }
+        if (!Number.isFinite(quantity) || quantity <= 0) {
+            return res.status(400).json({ ok: false, error: "quantity must be > 0" });
+        }
+
+        if (orderType === "LIMIT") {
+            const price = Number(body.price);
+            if (!Number.isFinite(price) || price <= 0) {
+                return res.status(400).json({ ok: false, error: "LIMIT requires a valid price" });
+            }
+        }
+
+        if (orderType === "STOP_MARKET" || orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT") {
+            const stopPrice = Number(body.stopPrice);
+            if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
+                return res.status(400).json({ ok: false, error: `${orderType} requires a valid stopPrice` });
+            }
+        }
+
+        if (orderType === "STOP_LOSS_LIMIT" || orderType === "TAKE_PROFIT_LIMIT") {
+            const stopPrice = Number(body.stopPrice);
+            const price = Number(body.price);
+            const timeInForce = String(body.timeInForce || "").toUpperCase();
+
+            if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
+                return res.status(400).json({ ok: false, error: `${orderType} requires a valid stopPrice` });
+            }
+            if (!Number.isFinite(price) || price <= 0) {
+                return res.status(400).json({ ok: false, error: `${orderType} requires a valid price` });
+            }
+            if (!timeInForce) {
+                return res.status(400).json({ ok: false, error: `${orderType} requires timeInForce` });
+            }
+        }
+
+        const orderId = String(body.orderId || body.id || randomUUID());
+        const command = {
+            type: "ORDER_CREATED",
+            orderId,
+            userId: req.user.id,
+            symbol,
+            side,
+            quantity,
+            orderType,
+            price: body.price,
+            stopPrice: body.stopPrice,
+            timeInForce: body.timeInForce,
+            meta: body.meta || {},
+            ts: Date.now(),
+        };
+
+        await prisma.orderCommand.create({
+            data: {
+                userId: req.user.id,
+                orderId,
+                symbol,
+                side,
+                type: orderType,
+                quantity,
+                price: body.price === undefined || body.price === null || body.price === "" ? null : Number(body.price),
+                stopPrice: body.stopPrice === undefined || body.stopPrice === null || body.stopPrice === "" ? null : Number(body.stopPrice),
+                timeInForce: body.timeInForce ? String(body.timeInForce).toUpperCase() : null,
+                status: "RECEIVED",
+            },
+        });
+
+        await redis.publish(COMMANDS_CHANNEL, JSON.stringify(command));
+
+        return res.json({ ok: true, orderId, status: "PENDING" });
+    } catch (e) {
+        if (e?.code === "P2002") {
+            return res.status(409).json({ ok: false, error: "orderId already exists" });
+        }
+        console.error("[backend] /orders create error:", e);
+        return res.status(500).json({ ok: false, error: "Server error" });
+    }
+});
+
 // -------- AUTH --------
 
 app.post("/auth/register", async (req, res) => {
