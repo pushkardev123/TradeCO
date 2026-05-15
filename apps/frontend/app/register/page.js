@@ -145,7 +145,7 @@ export default function SignupPage() {
                             <InputField label="Binance API Key" name="binanceApiKey" placeholder="Paste your API Key" />
                             <InputField label="Binance Secret Key" name="binanceSecretKey" type="password" placeholder="Paste your Secret Key" />
                             <Link href="https://testnet.binance.vision" target="_blank" className="text-xs text-neutral-400 hover:underline underline-offset-4 decoration-neutral-700 transition-all">
-                                Don't have Testnet keys? Create them here.
+                                Don&apos;t have Testnet keys? Create them here.
                             </Link>
                         </div>
 
