@@ -239,6 +239,8 @@ Execution Service publishes balance events with this payload shape:
 
 Frontend clients must not send `userId` for account or order authority. Account snapshots are requested through `GET /account-info` on the Event Service with a Bearer token; the Event Service verifies the token and forwards the authenticated user scope internally. Realtime balance updates arrive through `events:account:balances`; `events:account:update` is not part of the contract.
 
+Realtime Redis/WebSocket payload contracts are covered in `packages/redis-stream-contracts/src/realtimeEventContracts.test.js`, including order status, account balances, account/symbol RPC envelopes, market prices, chart updates, and the outer WebSocket `REDIS_EVENT` envelope.
+
 ⸻
 
 Key Engineering Decisions

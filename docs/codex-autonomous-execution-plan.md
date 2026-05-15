@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 03:03 IST
+Last updated: 2026-05-16 03:09 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `b7d62b0` (`Replace trading floats with decimals`)
+- Current pushed commit: `86eeb2e` (`Add execution reconciliation worker`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -27,6 +27,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `4c2237a` | Add Docker Compose local stack | One-command Docker stack, deployment docs, nginx sample, PM2 config, production env template, frontend build font fix. |
 | `9ce4698` | Extract Binance client module | Centralized Binance Spot Testnet REST client, signing, safe errors, rate-limit metadata, execution-service refactor. |
 | `b7d62b0` | Replace Float math with Decimal/string-safe trading values | Prisma Decimal migration, normalized decimal string service boundaries, Decimal-safe execution/account/position math, full compose verification. |
+| `86eeb2e` | Add order and account reconciliation worker | Stale order reconciliation, signed Binance read methods, account snapshot publishing, deterministic tests, compose verification. |
 
 ## Working Rules
 
@@ -132,3 +133,22 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
   - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
   - `npm run smoke:p0-auth-boundary`: pass.
+
+### Active: Add event contract tests
+
+- Notion page: `3608ea2b-3f8a-81c1-a0c8-e2f203dba901`
+- Status at start: `Not started`, `P1`, medium risk.
+- Branch: `main`
+- Started: 2026-05-16 03:07 IST
+- Goal: lock Redis Pub/Sub and WebSocket payload shapes before expanding realtime features.
+- Implementation:
+  - Added realtime event contract definitions for canonical channels, scoped channels, event type names, payload validators, and WebSocket `REDIS_EVENT` envelope validation.
+  - Covered order status, account balances, account info request/response, symbol info request/response, market price board/update, chart subscribe/unsubscribe, and kline snapshot/update events.
+  - Documented the contract test location in README near the account/balance contract note.
+- Verification:
+  - `npm run test:stream-contracts`: pass.
+  - `npm --workspace apps/event-service run test`: pass.
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `node --check packages/redis-stream-contracts/src/realtimeEventContracts.js`: pass.
+  - `npm run smoke:p0-auth-boundary`: pass.
+  - `git diff --check`: pass.
