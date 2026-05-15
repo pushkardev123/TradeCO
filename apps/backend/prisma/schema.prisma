@@ -8,14 +8,51 @@ generator client {
 }
 
 model User {
-  id                  String   @id @default(cuid())
-  email               String   @unique
+  id                  String               @id @default(cuid())
+  email               String               @unique
   passwordHash        String
-  binanceApiKeyEnc    String
-  binanceSecretKeyEnc String
-  createdAt           DateTime @default(now())
+  createdAt           DateTime             @default(now())
+  sessions            Session[]
+  exchangeCredentials ExchangeCredential[]
 }
 
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String    @unique
+  familyId         String
+  parentId         String?
+  replacedById     String?
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  rotatedAt        DateTime?
+  revokedAt        DateTime?
+  revokeReason     String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+}
+
+model ExchangeCredential {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exchange     String
+  label        String?
+  apiKeyEnc    String
+  secretKeyEnc String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, exchange])
+  @@index([userId, isActive])
+}
 
 model OrderCommand {
   id        String   @id @default(cuid())

@@ -50,6 +50,32 @@ function decrypt(payload) {
     return dec.toString("utf8");
 }
 
+const BINANCE_TESTNET_EXCHANGE = "BINANCE_SPOT_TESTNET";
+
+async function loadActiveExchangeCredential(prisma, userId) {
+    const credential = await prisma.exchangeCredential.findFirst({
+        where: {
+            userId,
+            exchange: BINANCE_TESTNET_EXCHANGE,
+            isActive: true,
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+            apiKeyEnc: true,
+            secretKeyEnc: true,
+        },
+    });
+
+    if (!credential) {
+        throw new Error("Exchange credential not found");
+    }
+
+    return {
+        apiKey: decrypt(credential.apiKeyEnc),
+        secretKey: decrypt(credential.secretKeyEnc),
+    };
+}
+
 const BINANCE_API_BASE = config.binanceApiBase;
 const BINANCE_WS_BASE = config.binanceWsBase;
 
@@ -775,12 +801,9 @@ async function main() {
             await pub.publish(replyTo, JSON.stringify({ ...baseResp, ok: true, fromCache: true, data: cached }));
             // Try to start stream even on cache hit, to handle server restarts or reconnections
             try {
-                const user = await prisma.user.findUnique({ where: { id: userId }, select: { binanceApiKeyEnc: true } });
-                if (user?.binanceApiKeyEnc) {
-                    const apiKey = decrypt(user.binanceApiKeyEnc);
-                    // Force startUserDataStream call, which now safely handles duplicates via Map check
-                    startUserDataStream({ prisma, pub, userId, apiKey });
-                }
+                const { apiKey } = await loadActiveExchangeCredential(prisma, userId);
+                // Force startUserDataStream call, which now safely handles duplicates via Map check
+                startUserDataStream({ prisma, pub, userId, apiKey });
             } catch { }
             return;
         }
@@ -788,10 +811,9 @@ async function main() {
         let apiKey;
         let secretKey;
         try {
-            const user = await prisma.user.findUnique({ where: { id: userId }, select: { binanceApiKeyEnc: true, binanceSecretKeyEnc: true } });
-            if (!user) throw new Error("User not found");
-            apiKey = decrypt(user.binanceApiKeyEnc);
-            secretKey = decrypt(user.binanceSecretKeyEnc);
+            const credential = await loadActiveExchangeCredential(prisma, userId);
+            apiKey = credential.apiKey;
+            secretKey = credential.secretKey;
         } catch (e) {
             await pub.publish(replyTo, JSON.stringify({ ...baseResp, ok: false, error: e?.message || "failed to load keys" }));
             return;
@@ -863,10 +885,9 @@ async function main() {
         let binanceSecretKey = null;
 
         try {
-            const user = await prisma.user.findUnique({ where: { id: uid }, select: { binanceApiKeyEnc: true, binanceSecretKeyEnc: true } });
-            if (!user) throw new Error(`User not found for userId=${uid}`);
-            binanceApiKey = decrypt(user.binanceApiKeyEnc);
-            binanceSecretKey = decrypt(user.binanceSecretKeyEnc);
+            const credential = await loadActiveExchangeCredential(prisma, uid);
+            binanceApiKey = credential.apiKey;
+            binanceSecretKey = credential.secretKey;
         } catch (e) {
             const now = new Date();
             await prisma.orderEvent.create({ data: { orderId: cmd.orderId, userId: uid, status: "REJECTED", price: null, quantity: Number(cmd.quantity), timestamp: now } }).catch(() => { });

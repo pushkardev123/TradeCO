@@ -1,16 +1,23 @@
 import express from "express";
 import cors from "cors";
-import bcrypt from "bcrypt";
 import { PrismaClient } from "@prisma/client";
 import { createClient } from "redis";
 import { randomUUID } from "crypto";
 
-import { encrypt } from "./crypto.js";
-import { signToken } from "./jwt.js";
+import { verifyAccessToken } from "./jwt.js";
 import { requireAuth } from "./middleware.js";
 import { getAccountInfo } from "./binance.js";
-import { decrypt } from "./crypto.js";
 import { config, isCorsOriginAllowed, logStartupConfig, safeErrorMessage } from "./config.js";
+import {
+    getAuthenticatedUserContext,
+    getSessionMeta,
+    loginUser,
+    logoutRefreshSession,
+    refreshAuthSession,
+    registerUser,
+} from "./authService.js";
+import { clearRefreshCookie, getRefreshTokenFromRequest, setRefreshCookie } from "./cookies.js";
+import { getDecryptedExchangeCredential } from "./credentials.js";
 
 const PORT = config.port;
 const REDIS_URL = config.redisUrl;
@@ -26,6 +33,7 @@ app.use(cors({
         }
         return callback(new Error("CORS origin not allowed"));
     },
+    credentials: true,
 }));
 app.use(express.json());
 
@@ -70,6 +78,31 @@ function rejectClientUserId(req, res) {
 }
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "backend" }));
+
+function sendAuthError(res, err, fallback = "Server error") {
+    if (err?.code === "P2002") {
+        return res.status(409).json({ ok: false, error: "Email already registered" });
+    }
+
+    if (err?.statusCode) {
+        return res.status(err.statusCode).json({ ok: false, error: err.message });
+    }
+
+    console.error("[backend] auth error:", err?.code || err?.name || fallback);
+    return res.status(500).json({ ok: false, error: fallback });
+}
+
+function getBearerSessionId(req) {
+    const header = req.headers.authorization || "";
+    const [type, token] = header.split(" ");
+    if (type !== "Bearer" || !token) return null;
+
+    try {
+        return verifyAccessToken(token).sid;
+    } catch {
+        return null;
+    }
+}
 
 // -------- POSITIONS (UI pagination) --------
 // Cursor-based pagination by Position.id (newest updated first)
@@ -306,56 +339,86 @@ app.post("/orders", requireAuth, async (req, res) => {
 app.post("/auth/register", async (req, res) => {
     try {
         const { email, password, binanceApiKey, binanceSecretKey } = req.body || {};
-
-        if (!email || !password || !binanceApiKey || !binanceSecretKey) {
-            return res.status(400).json({ ok: false, error: "Missing fields" });
-        }
-
-        const existing = await prisma.user.findUnique({ where: { email } });
-        if (existing) {
-            return res.status(409).json({ ok: false, error: "Email already registered" });
-        }
-
-        const passwordHash = await bcrypt.hash(password, 12);
-
-        const user = await prisma.user.create({
-            data: {
-                email,
-                passwordHash,
-                binanceApiKeyEnc: encrypt(binanceApiKey),
-                binanceSecretKeyEnc: encrypt(binanceSecretKey)
-            },
-            select: { id: true, email: true, createdAt: true }
+        const auth = await registerUser({
+            prisma,
+            email,
+            password,
+            binanceApiKey,
+            binanceSecretKey,
+            meta: getSessionMeta(req),
         });
 
-        const token = signToken({ userId: user.id, email: user.email });
+        setRefreshCookie(res, auth.refreshToken);
 
-        return res.json({ ok: true, token, user });
+        const { refreshToken: _refreshToken, ...body } = auth;
+        return res.status(201).json({ ok: true, ...body });
     } catch (e) {
-        console.error(e);
-        return res.status(500).json({ ok: false, error: "Server error" });
+        return sendAuthError(res, e);
     }
 });
 
 app.post("/auth/login", async (req, res) => {
     try {
         const { email, password } = req.body || {};
-        if (!email || !password) {
-            return res.status(400).json({ ok: false, error: "Missing fields" });
-        }
+        const auth = await loginUser({
+            prisma,
+            email,
+            password,
+            meta: getSessionMeta(req),
+        });
 
-        const user = await prisma.user.findUnique({ where: { email } });
-        if (!user) return res.status(401).json({ ok: false, error: "Invalid credentials" });
+        setRefreshCookie(res, auth.refreshToken);
 
-        const ok = await bcrypt.compare(password, user.passwordHash);
-        if (!ok) return res.status(401).json({ ok: false, error: "Invalid credentials" });
-
-        const token = signToken({ userId: user.id, email: user.email });
-
-        return res.json({ ok: true, token, user: { id: user.id, email: user.email } });
+        const { refreshToken: _refreshToken, ...body } = auth;
+        return res.json({ ok: true, ...body });
     } catch (e) {
-        console.error(e);
-        return res.status(500).json({ ok: false, error: "Server error" });
+        return sendAuthError(res, e);
+    }
+});
+
+app.post("/auth/refresh", async (req, res) => {
+    try {
+        const auth = await refreshAuthSession({
+            prisma,
+            refreshToken: getRefreshTokenFromRequest(req),
+            meta: getSessionMeta(req),
+        });
+
+        setRefreshCookie(res, auth.refreshToken);
+
+        const { refreshToken: _refreshToken, ...body } = auth;
+        return res.json({ ok: true, ...body });
+    } catch (e) {
+        clearRefreshCookie(res);
+        return sendAuthError(res, e);
+    }
+});
+
+app.post("/auth/logout", async (req, res) => {
+    try {
+        await logoutRefreshSession({
+            prisma,
+            refreshToken: getRefreshTokenFromRequest(req),
+            sessionId: getBearerSessionId(req),
+        });
+        clearRefreshCookie(res);
+        return res.json({ ok: true });
+    } catch (e) {
+        clearRefreshCookie(res);
+        return sendAuthError(res, e);
+    }
+});
+
+app.get("/auth/me", requireAuth, async (req, res) => {
+    try {
+        const context = await getAuthenticatedUserContext({
+            prisma,
+            userId: req.user.id,
+            sessionId: req.user.sessionId,
+        });
+        return res.json({ ok: true, ...context });
+    } catch (e) {
+        return sendAuthError(res, e);
     }
 });
 
@@ -470,25 +533,14 @@ app.get("/api/trading/account", requireAuth, async (req, res) => {
     try {
         if (rejectClientUserId(req, res)) return;
 
-        // 1) fetch encrypted keys from DB
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            select: { binanceApiKeyEnc: true, binanceSecretKeyEnc: true },
-        });
-
-        if (!user) {
-            return res.status(404).json({ ok: false, error: "User not found" });
-        }
-
-        // decrypt keys
-        const apiKey = decrypt(user.binanceApiKeyEnc);
-        const apiSecret = decrypt(user.binanceSecretKeyEnc);
-
-        // 2) call Binance
+        const { apiKey, apiSecret } = await getDecryptedExchangeCredential(prisma, req.user.id);
         const accountData = await getAccountInfo(apiKey, apiSecret);
 
         return res.json({ ok: true, account: accountData });
     } catch (e) {
+        if (e?.statusCode) {
+            return res.status(e.statusCode).json({ ok: false, error: e.message });
+        }
         console.error("[backend] get account error:", e);
         return res.status(500).json({ ok: false, error: "Failed to fetch account" });
     }

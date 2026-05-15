@@ -1,4 +1,4 @@
-import { verifyToken } from "./jwt.js";
+import { verifyAccessToken } from "./jwt.js";
 
 export function requireAuth(req, res, next) {
     const header = req.headers.authorization || "";
@@ -9,13 +9,8 @@ export function requireAuth(req, res, next) {
     }
 
     try {
-        const decoded = verifyToken(token);
-        const userId = decoded?.userId || decoded?.id || decoded?.sub;
-        if (!userId) {
-            return res.status(401).json({ ok: false, error: "Token missing user identity" });
-        }
-
-        req.user = { id: String(userId), email: decoded?.email || null };
+        const decoded = verifyAccessToken(token);
+        req.user = { id: decoded.sub, email: decoded.email || null, sessionId: decoded.sid };
         return next();
     } catch {
         return res.status(401).json({ ok: false, error: "Invalid/expired token" });
