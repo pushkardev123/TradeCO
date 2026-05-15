@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 03:17 IST
+Last updated: 2026-05-16 03:19 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `431455d` (`Add realtime event contract tests`)
+- Current pushed commit: `352367a` (`Harden scoped realtime broadcasts`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -29,6 +29,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `b7d62b0` | Replace Float math with Decimal/string-safe trading values | Prisma Decimal migration, normalized decimal string service boundaries, Decimal-safe execution/account/position math, full compose verification. |
 | `86eeb2e` | Add order and account reconciliation worker | Stale order reconciliation, signed Binance read methods, account snapshot publishing, deterministic tests, compose verification. |
 | `431455d` | Add event contract tests | Shared realtime channel/payload contract tests for Redis Pub/Sub and WebSocket envelopes. |
+| `352367a` | Broadcast scoped order and account events | Event-service contract-backed private fanout, runtime channel override validation, and full rejected-order realtime payloads. |
 
 ## Working Rules
 
@@ -154,7 +155,7 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p0-auth-boundary`: pass.
   - `git diff --check`: pass.
 
-### Active: Broadcast scoped order and account events
+### Completed: Broadcast scoped order and account events
 
 - Notion page: `3608ea2b-3f8a-8174-9ad7-db072df78a2e`
 - Status at start: `Not started`, `P1`, medium risk.
