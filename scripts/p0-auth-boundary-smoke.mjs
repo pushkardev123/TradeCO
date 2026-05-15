@@ -24,7 +24,9 @@ assert.match(frontendTrade, /\/account-info/);
 assert.doesNotMatch(frontendTrade, /userId\s*:/);
 assert.doesNotMatch(frontendAuth, /localStorage\.(?:getItem|setItem)\(\s*["']userId["']/);
 
-assert.match(backendMiddleware, /const userId = decoded\?\.userId \|\| decoded\?\.id \|\| decoded\?\.sub/);
+assert.match(backendMiddleware, /verifyAccessToken\(token\)/);
+assert.match(backendMiddleware, /req\.user = \{ id: decoded\.sub, email: decoded\.email \|\| null, sessionId: decoded\.sid \}/);
+assert.doesNotMatch(backendMiddleware, /decoded\?\.userId|decoded\?\.id/);
 assert.match(backendIndex, /function rejectClientUserId/);
 assert.match(backendIndex, /res\.status\(403\)\.json\(\{\s+ok: false,\s+error: "userId does not match the authenticated user"/);
 assert.doesNotMatch(backendIndex, /userId:\s*["']test-user["']/);
