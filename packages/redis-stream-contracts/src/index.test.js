@@ -5,11 +5,18 @@ import {
     ORDER_COMMAND_TYPES,
     ORDER_EVENT_TYPES,
     ORDER_STREAMS,
+    buildOrderCancelAllStreamEntry,
+    buildOrderCancelStreamEntry,
     buildOrderCommandDeadLetterEntry,
     buildOrderSubmitStreamEntry,
     createOrderCommandConsumerName,
     getOrderStreamConfig,
+    parseOrderCancelAllStreamEntry,
+    parseOrderCancelStreamEntry,
+    parseOrderCommandStreamEntry,
     parseOrderSubmitStreamEntry,
+    validateOrderCancelAllCommand,
+    validateOrderCancelCommand,
     validateOrderSubmitCommand,
 } from "./index.js";
 
@@ -116,6 +123,92 @@ test("parses a stream entry and preserves normalized decimal strings", () => {
     assert.equal(parsed.price, "65000.25");
     assert.equal(parsed.timeInForce, "GTC");
     assert.deepEqual(parsed.metadata, { client: "web" });
+});
+
+test("builds and parses an order cancel stream entry", () => {
+    const entry = buildOrderCancelStreamEntry({
+        commandId: "cancel_123",
+        orderId: "order_123",
+        userId: "user_123",
+        symbol: "btcusdt",
+        requestId: "req_cancel",
+        createdAt: "2026-05-16T00:00:00.000Z",
+        metadata: { reason: "user_requested" },
+    });
+
+    assert.equal(entry.schemaVersion, "1");
+    assert.equal(entry.messageType, ORDER_COMMAND_TYPES.cancel);
+    assert.equal(entry.commandId, "cancel_123");
+    assert.equal(entry.orderId, "order_123");
+    assert.equal(entry.userId, "user_123");
+    assert.equal(entry.symbol, "BTCUSDT");
+    assert.equal(entry.metadata, JSON.stringify({ reason: "user_requested" }));
+
+    assert.deepEqual(parseOrderCancelStreamEntry(entry), {
+        schemaVersion: "1",
+        messageType: ORDER_COMMAND_TYPES.cancel,
+        commandId: "cancel_123",
+        orderId: "order_123",
+        userId: "user_123",
+        symbol: "BTCUSDT",
+        requestId: "req_cancel",
+        source: "backend",
+        createdAt: "2026-05-16T00:00:00.000Z",
+        metadata: { reason: "user_requested" },
+    });
+    assert.equal(parseOrderCommandStreamEntry(entry).messageType, ORDER_COMMAND_TYPES.cancel);
+});
+
+test("builds and parses an order cancel-all stream entry", () => {
+    const entry = buildOrderCancelAllStreamEntry({
+        commandId: "cancel_all_123",
+        userId: "user_123",
+        symbol: "ethusdt",
+        requestId: "req_cancel_all",
+        createdAt: "2026-05-16T00:00:00.000Z",
+    });
+
+    assert.equal(entry.schemaVersion, "1");
+    assert.equal(entry.messageType, ORDER_COMMAND_TYPES.cancelAll);
+    assert.equal(entry.commandId, "cancel_all_123");
+    assert.equal(entry.userId, "user_123");
+    assert.equal(entry.symbol, "ETHUSDT");
+    assert.equal(entry.orderId, undefined);
+    assert.equal(entry.metadata, "{}");
+
+    assert.deepEqual(parseOrderCancelAllStreamEntry(entry), {
+        schemaVersion: "1",
+        messageType: ORDER_COMMAND_TYPES.cancelAll,
+        commandId: "cancel_all_123",
+        userId: "user_123",
+        symbol: "ETHUSDT",
+        requestId: "req_cancel_all",
+        source: "backend",
+        createdAt: "2026-05-16T00:00:00.000Z",
+        metadata: {},
+    });
+    assert.equal(parseOrderCommandStreamEntry(entry).messageType, ORDER_COMMAND_TYPES.cancelAll);
+});
+
+test("validates cancel and cancel-all ownership fields", () => {
+    assert.match(
+        validateOrderCancelCommand({
+            commandId: "cancel_123",
+            orderId: "order_123",
+            symbol: "BTCUSDT",
+            createdAt: "2026-05-16T00:00:00.000Z",
+        }).join("\n"),
+        /userId is required/,
+    );
+
+    assert.match(
+        validateOrderCancelAllCommand({
+            commandId: "cancel_all_123",
+            userId: "user_123",
+            createdAt: "2026-05-16T00:00:00.000Z",
+        }).join("\n"),
+        /symbol is required/,
+    );
 });
 
 test("defaults missing metadata to an empty object in stream entries", () => {

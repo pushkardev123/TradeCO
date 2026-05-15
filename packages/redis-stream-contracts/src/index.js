@@ -15,6 +15,7 @@ export const ORDER_CONSUMER_GROUPS = Object.freeze({
 export const ORDER_COMMAND_TYPES = Object.freeze({
     submit: "order.submit.requested.v1",
     cancel: "order.cancel.requested.v1",
+    cancelAll: "order.cancel_all.requested.v1",
 });
 
 export const ORDER_EVENT_TYPES = Object.freeze({
@@ -176,15 +177,7 @@ export function parseOrderSubmitStreamEntry(fields) {
         throw new Error("Redis stream entry fields must be an object");
     }
 
-    let metadata = {};
-
-    if (fields.metadata !== undefined && fields.metadata !== "") {
-        try {
-            metadata = JSON.parse(fields.metadata);
-        } catch {
-            throw new Error("Redis stream entry metadata must be valid JSON");
-        }
-    }
+    const metadata = parseStreamMetadata(fields);
 
     const command = normalizeOrderSubmitCommand({
         ...fields,
@@ -197,6 +190,178 @@ export function parseOrderSubmitStreamEntry(fields) {
     }
 
     return command;
+}
+
+export function validateOrderCancelCommand(input) {
+    const errors = [];
+
+    if (!isPlainObject(input)) {
+        return ["command must be an object"];
+    }
+
+    const schemaVersion = optionalString(input.schemaVersion) || STREAM_CONTRACT_VERSION;
+    const messageType = optionalString(input.messageType) || ORDER_COMMAND_TYPES.cancel;
+
+    if (schemaVersion !== STREAM_CONTRACT_VERSION) {
+        errors.push(`schemaVersion must be ${STREAM_CONTRACT_VERSION}`);
+    }
+
+    if (messageType !== ORDER_COMMAND_TYPES.cancel) {
+        errors.push(`messageType must be ${ORDER_COMMAND_TYPES.cancel}`);
+    }
+
+    requireNonEmptyString(input.commandId, "commandId", errors);
+    requireNonEmptyString(input.orderId, "orderId", errors);
+    requireNonEmptyString(input.userId, "userId", errors);
+    requireNonEmptyString(input.symbol, "symbol", errors);
+    requireNonEmptyString(input.createdAt, "createdAt", errors);
+
+    if (typeof input.createdAt === "string" && Number.isNaN(Date.parse(input.createdAt))) {
+        errors.push("createdAt must be an ISO-compatible timestamp");
+    }
+
+    if (input.metadata !== undefined && !isPlainObject(input.metadata)) {
+        errors.push("metadata must be an object when provided");
+    }
+
+    return errors;
+}
+
+export function buildOrderCancelStreamEntry(input) {
+    const command = normalizeOrderCancelCommand(input);
+    const errors = validateOrderCancelCommand(command);
+
+    if (errors.length > 0) {
+        throw new Error(`Invalid order cancel command: ${errors.join("; ")}`);
+    }
+
+    return omitEmptyFields({
+        schemaVersion: command.schemaVersion,
+        messageType: command.messageType,
+        commandId: command.commandId,
+        orderId: command.orderId,
+        userId: command.userId,
+        symbol: command.symbol,
+        requestId: command.requestId,
+        source: command.source,
+        createdAt: command.createdAt,
+        metadata: JSON.stringify(command.metadata),
+    });
+}
+
+export function parseOrderCancelStreamEntry(fields) {
+    if (!isPlainObject(fields)) {
+        throw new Error("Redis stream entry fields must be an object");
+    }
+
+    const metadata = parseStreamMetadata(fields);
+    const command = normalizeOrderCancelCommand({
+        ...fields,
+        metadata,
+    });
+    const errors = validateOrderCancelCommand(command);
+
+    if (errors.length > 0) {
+        throw new Error(`Invalid order cancel stream entry: ${errors.join("; ")}`);
+    }
+
+    return command;
+}
+
+export function validateOrderCancelAllCommand(input) {
+    const errors = [];
+
+    if (!isPlainObject(input)) {
+        return ["command must be an object"];
+    }
+
+    const schemaVersion = optionalString(input.schemaVersion) || STREAM_CONTRACT_VERSION;
+    const messageType = optionalString(input.messageType) || ORDER_COMMAND_TYPES.cancelAll;
+
+    if (schemaVersion !== STREAM_CONTRACT_VERSION) {
+        errors.push(`schemaVersion must be ${STREAM_CONTRACT_VERSION}`);
+    }
+
+    if (messageType !== ORDER_COMMAND_TYPES.cancelAll) {
+        errors.push(`messageType must be ${ORDER_COMMAND_TYPES.cancelAll}`);
+    }
+
+    requireNonEmptyString(input.commandId, "commandId", errors);
+    requireNonEmptyString(input.userId, "userId", errors);
+    requireNonEmptyString(input.symbol, "symbol", errors);
+    requireNonEmptyString(input.createdAt, "createdAt", errors);
+
+    if (typeof input.createdAt === "string" && Number.isNaN(Date.parse(input.createdAt))) {
+        errors.push("createdAt must be an ISO-compatible timestamp");
+    }
+
+    if (input.metadata !== undefined && !isPlainObject(input.metadata)) {
+        errors.push("metadata must be an object when provided");
+    }
+
+    return errors;
+}
+
+export function buildOrderCancelAllStreamEntry(input) {
+    const command = normalizeOrderCancelAllCommand(input);
+    const errors = validateOrderCancelAllCommand(command);
+
+    if (errors.length > 0) {
+        throw new Error(`Invalid order cancel-all command: ${errors.join("; ")}`);
+    }
+
+    return omitEmptyFields({
+        schemaVersion: command.schemaVersion,
+        messageType: command.messageType,
+        commandId: command.commandId,
+        userId: command.userId,
+        symbol: command.symbol,
+        requestId: command.requestId,
+        source: command.source,
+        createdAt: command.createdAt,
+        metadata: JSON.stringify(command.metadata),
+    });
+}
+
+export function parseOrderCancelAllStreamEntry(fields) {
+    if (!isPlainObject(fields)) {
+        throw new Error("Redis stream entry fields must be an object");
+    }
+
+    const metadata = parseStreamMetadata(fields);
+    const command = normalizeOrderCancelAllCommand({
+        ...fields,
+        metadata,
+    });
+    const errors = validateOrderCancelAllCommand(command);
+
+    if (errors.length > 0) {
+        throw new Error(`Invalid order cancel-all stream entry: ${errors.join("; ")}`);
+    }
+
+    return command;
+}
+
+export function parseOrderCommandStreamEntry(fields) {
+    if (!isPlainObject(fields)) {
+        throw new Error("Redis stream entry fields must be an object");
+    }
+
+    const messageType = optionalString(fields.messageType) || ORDER_COMMAND_TYPES.submit;
+
+    if (messageType === ORDER_COMMAND_TYPES.submit) {
+        return parseOrderSubmitStreamEntry(fields);
+    }
+
+    if (messageType === ORDER_COMMAND_TYPES.cancel) {
+        return parseOrderCancelStreamEntry(fields);
+    }
+
+    if (messageType === ORDER_COMMAND_TYPES.cancelAll) {
+        return parseOrderCancelAllStreamEntry(fields);
+    }
+
+    throw new Error(`Unsupported order command messageType: ${messageType}`);
 }
 
 export function buildOrderCommandDeadLetterEntry({
@@ -263,6 +428,55 @@ function normalizeOrderSubmitCommand(input) {
         createdAt: optionalString(input.createdAt) || new Date().toISOString(),
         metadata: input.metadata === undefined || input.metadata === null ? {} : input.metadata,
     });
+}
+
+function normalizeOrderCancelCommand(input) {
+    if (!isPlainObject(input)) {
+        return input;
+    }
+
+    return omitUndefinedFields({
+        schemaVersion: optionalString(input.schemaVersion) || STREAM_CONTRACT_VERSION,
+        messageType: optionalString(input.messageType) || ORDER_COMMAND_TYPES.cancel,
+        commandId: optionalString(input.commandId),
+        orderId: optionalString(input.orderId),
+        userId: optionalString(input.userId),
+        symbol: normalizeToken(input.symbol),
+        requestId: optionalString(input.requestId),
+        source: optionalString(input.source) || "backend",
+        createdAt: optionalString(input.createdAt) || new Date().toISOString(),
+        metadata: input.metadata === undefined || input.metadata === null ? {} : input.metadata,
+    });
+}
+
+function normalizeOrderCancelAllCommand(input) {
+    if (!isPlainObject(input)) {
+        return input;
+    }
+
+    return omitUndefinedFields({
+        schemaVersion: optionalString(input.schemaVersion) || STREAM_CONTRACT_VERSION,
+        messageType: optionalString(input.messageType) || ORDER_COMMAND_TYPES.cancelAll,
+        commandId: optionalString(input.commandId),
+        userId: optionalString(input.userId),
+        symbol: normalizeToken(input.symbol),
+        requestId: optionalString(input.requestId),
+        source: optionalString(input.source) || "backend",
+        createdAt: optionalString(input.createdAt) || new Date().toISOString(),
+        metadata: input.metadata === undefined || input.metadata === null ? {} : input.metadata,
+    });
+}
+
+function parseStreamMetadata(fields) {
+    if (fields.metadata === undefined || fields.metadata === "") {
+        return {};
+    }
+
+    try {
+        return JSON.parse(fields.metadata);
+    } catch {
+        throw new Error("Redis stream entry metadata must be valid JSON");
+    }
 }
 
 function readOptionalEnv(env, name) {

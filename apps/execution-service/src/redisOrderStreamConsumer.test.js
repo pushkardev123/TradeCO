@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildOrderSubmitStreamEntry } from "@tradeco/redis-stream-contracts";
+import { buildOrderCancelStreamEntry, buildOrderSubmitStreamEntry } from "@tradeco/redis-stream-contracts";
 import {
     ensureOrderConsumerGroup,
     flattenRedisStreamMessages,
@@ -109,6 +109,33 @@ test("handleOrderStreamMessage processes valid command and acknowledges it", asy
     });
 
     assert.equal(result.outcome, "acked");
+    assert.equal(processed[0].orderId, "order_123");
+    assert.deepEqual(redis.calls, [["xAck", "orders", "execution", "1715712000000-0"]]);
+});
+
+test("handleOrderStreamMessage processes cancel lifecycle commands", async () => {
+    const redis = createRedis();
+    const processed = [];
+    const fields = buildOrderCancelStreamEntry({
+        commandId: "cancel_123",
+        orderId: "order_123",
+        userId: "user_123",
+        symbol: "BTCUSDT",
+        createdAt: "2026-05-16T00:00:00.000Z",
+    });
+
+    const result = await handleOrderStreamMessage({
+        redis,
+        streamName: "orders",
+        groupName: "execution",
+        dlqStreamName: "orders:dlq",
+        maxAttempts: 3,
+        message: { id: "1715712000000-0", fields },
+        processCommand: async (command) => processed.push(command),
+    });
+
+    assert.equal(result.outcome, "acked");
+    assert.equal(processed[0].messageType, "order.cancel.requested.v1");
     assert.equal(processed[0].orderId, "order_123");
     assert.deepEqual(redis.calls, [["xAck", "orders", "execution", "1715712000000-0"]]);
 });

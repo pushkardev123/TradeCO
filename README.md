@@ -173,11 +173,19 @@ Order Lifecycle (Asynchronous)
 	6.	Execution Service persists/fans out ORDER_EVENT updates
 	7.	Event Service pushes scoped updates only to the authenticated user
 
+Core backend lifecycle endpoints:
+
+- `POST /orders` places an order asynchronously.
+- `GET /orders/:orderId` queries one authenticated user's local order lifecycle.
+- `GET /orders/open?symbol=BTCUSDT` lists local open orders, optionally scoped to a symbol.
+- `DELETE /orders/:orderId` cancels one open order asynchronously.
+- `DELETE /orders/open?symbol=BTCUSDT` cancels all open orders for a symbol asynchronously.
+
 Redis Streams contract:
 
 - Stream names and message fields are defined in [docs/architecture/redis-stream-contracts.md](docs/architecture/redis-stream-contracts.md).
 - The shared implementation lives in `packages/redis-stream-contracts`.
-- Backend `POST /orders` persists `OrderCommand`, appends `order.submit.requested.v1` to `ORDER_COMMAND_STREAM`, and temporarily publishes `COMMANDS_CHANNEL`; execution consumes the stream by default.
+- Backend `POST /orders` persists `OrderCommand`, appends `order.submit.requested.v1` to `ORDER_COMMAND_STREAM`, and temporarily publishes `COMMANDS_CHANNEL`; cancel endpoints append `order.cancel.requested.v1` and `order.cancel_all.requested.v1` stream-only commands. Execution consumes the stream by default.
 
 ⸻
 

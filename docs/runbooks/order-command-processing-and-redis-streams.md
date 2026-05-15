@@ -1,6 +1,6 @@
 # Order Command Processing and Redis Streams
 
-Status: Backend Redis Stream producer and execution stream consumer are implemented. Backend still dual-writes Pub/Sub during transition, but execution treats Pub/Sub as fallback-only.
+Status: Backend Redis Stream producer and execution stream consumer are implemented for submit, query/open local state, cancel, and cancel-all. Backend still dual-writes submit Pub/Sub during transition, but execution treats Pub/Sub as fallback-only. Cancel commands are stream-only.
 
 Tracker row: https://www.notion.so/3608ea2b3f8a81ff8e58dbde4c5b164a
 
@@ -21,9 +21,15 @@ Frontend -> Backend API -> OrderCommand -> Redis Stream -> Execution Service -> 
 Current implementation note:
 
 - Backend `POST /orders` persists `OrderCommand`, appends the v1 order submit entry to `ORDER_COMMAND_STREAM`, and then publishes JSON to the Redis Pub/Sub channel configured by `COMMANDS_CHANNEL`, defaulting to `commands:order:submit`.
+- Backend `GET /orders/:orderId` returns one authenticated user's local order plus `OrderEvent` history.
+- Backend `GET /orders/open?symbol=BTCUSDT` returns local open lifecycle rows for the authenticated user.
+- Backend `DELETE /orders/:orderId` persists `CANCEL_REQUESTED`, appends `order.cancel.requested.v1`, and returns `202`.
+- Backend `DELETE /orders/open?symbol=BTCUSDT` persists `CANCEL_REQUESTED` for matching local open orders, appends `order.cancel_all.requested.v1`, and returns `202`.
 - If stream append fails after the database create, backend marks the command `STREAM_APPEND_FAILED` when possible and returns `503`. Do not expect the legacy Pub/Sub publish in that failure path.
+- If cancel stream append fails after lifecycle state is persisted, backend marks affected local commands `CANCEL_APPEND_FAILED` and returns `503`.
 - Duplicate submissions with the same authenticated user, `orderId`, and order intent return the existing command response without appending another stream entry. A duplicate for a command in `STREAM_APPEND_FAILED` retries the stream append.
 - Execution service consumes `ORDER_COMMAND_STREAM` with consumer group `ORDER_COMMAND_CONSUMER_GROUP` and only subscribes to the legacy Pub/Sub command channel when `LEGACY_COMMANDS_CHANNEL_ENABLED=true`.
+- Execution service processes cancel with Binance Spot Testnet `DELETE /api/v3/order` and cancel-all with `DELETE /api/v3/openOrders`, then persists `OrderCommand` / `OrderEvent` state and publishes scoped status events.
 - Event service rejects public `POST /orders` ingress with `410` and tells callers to use the backend API.
 - The committed stream contract lives in `packages/redis-stream-contracts` and is documented in [Redis Stream Contracts](../architecture/redis-stream-contracts.md).
 
@@ -50,10 +56,40 @@ Current implementation note:
 7. Confirm user-scoped event publication.
    Execution service publishes order status to `EVENTS_CHANNEL`, defaulting to `events:order:status`. Event service forwards scoped order updates only when the message contains a `userId` matching the authenticated WebSocket client.
 
+## Core Lifecycle API Checks
+
+Use a valid access token for all requests. Do not include `userId` or `user_id` in params, query strings, bodies, or nested metadata.
+
+```sh
+curl -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$BACKEND_URL/orders/$ORDER_ID"
+
+curl -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$BACKEND_URL/orders/open?symbol=BTCUSDT"
+
+curl -X DELETE -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$BACKEND_URL/orders/$ORDER_ID"
+
+curl -X DELETE -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$BACKEND_URL/orders/open?symbol=BTCUSDT"
+```
+
+Expected local lifecycle statuses:
+
+| Phase | Statuses |
+| --- | --- |
+| Submit accepted locally | `RECEIVED`, `PENDING` |
+| Exchange acknowledged/open | `SUBMITTED`, `PARTIALLY_FILLED` |
+| Cancel requested | `CANCEL_REQUESTED`, `CANCEL_PENDING` |
+| Cancel failed before/during execution | `CANCEL_APPEND_FAILED`, `CANCEL_REJECTED` |
+| Terminal | `FILLED`, `CANCELED`, `REJECTED`, `EXPIRED` |
+
 ## Verification Checks
 
 - Backend order request derives user identity from the verified access token.
-- Redis Stream entries use `order.submit.requested.v1`, `schemaVersion: 1`, and decimal strings for quantity, price, and stop price.
+- Redis Stream entries use `schemaVersion: 1` and one of `order.submit.requested.v1`, `order.cancel.requested.v1`, or `order.cancel_all.requested.v1`.
+- Submit stream entries use decimal strings for quantity, price, and stop price.
+- Cancel stream entries include the backend-authenticated `userId`, internal `orderId`, and symbol; cancel-all stream entries include backend-authenticated `userId` and symbol.
 - Local Redis Stream smoke passes:
 
   ```sh
@@ -68,6 +104,7 @@ Current implementation note:
 
 - Event service does not accept public order placement commands.
 - Order command and latest order event share the expected `orderId` and `userId`.
+- Cancel and cancel-all tests use mocks and must not require live Binance credentials.
 - Logs do not contain API keys, signed URLs, JWTs, refresh tokens, or decrypted credential values.
 
 ## Risks
@@ -87,7 +124,7 @@ Committed names:
 | Order event stream | `tradeco:orders:events:v1` |
 | Execution consumer group | `tradeco:execution:orders:v1` |
 
-The v1 order submit message type is `order.submit.requested.v1`. The backend must derive `userId` from the verified access token, persist `OrderCommand`, and then append a sanitized stream entry. Trading numeric values must be positive decimal strings, not JavaScript numbers.
+The v1 order lifecycle message types are `order.submit.requested.v1`, `order.cancel.requested.v1`, and `order.cancel_all.requested.v1`. The backend must derive `userId` from the verified access token, persist lifecycle state, and then append a sanitized stream entry. Trading numeric values must be positive decimal strings, not JavaScript numbers.
 
 Idempotency keys:
 

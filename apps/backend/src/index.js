@@ -19,7 +19,10 @@ import {
 import { clearRefreshCookie, getRefreshTokenFromRequest, setRefreshCookie } from "./cookies.js";
 import { getDecryptedExchangeCredential } from "./credentials.js";
 import {
+    appendOrderCommandStreamEntry,
     appendOrderSubmitStreamEntry,
+    createOrderCancelAllDraftFromRequest,
+    createOrderCancelDraftFromRequest,
     createOrderSubmitDraftFromRequest,
     getRequestIdFromHeaders,
     isSameOrderIntent,
@@ -48,6 +51,18 @@ app.use(express.json());
 const redis = createClient({ url: REDIS_URL });
 redis.on("error", (e) => console.error("[backend] redis error:", safeErrorMessage(e)));
 
+const OPEN_ORDER_STATUSES = Object.freeze([
+    "RECEIVED",
+    "PENDING",
+    "SUBMITTED",
+    "PARTIALLY_FILLED",
+    "CANCEL_REQUESTED",
+    "CANCEL_PENDING",
+    "CANCEL_REJECTED",
+    "CANCEL_APPEND_FAILED",
+]);
+const CANCEL_IN_FLIGHT_STATUSES = new Set(["CANCEL_REQUESTED", "CANCEL_PENDING"]);
+
 function hasUserIdField(value) {
     return Boolean(
         value &&
@@ -63,7 +78,7 @@ function getClientUserId(value) {
 }
 
 function rejectClientUserId(req, res) {
-    const supplied = [req.query, req.body, req.body?.meta]
+    const supplied = [req.params, req.query, req.body, req.body?.meta]
         .map(getClientUserId)
         .find((value) => value !== null);
 
@@ -86,6 +101,86 @@ function rejectClientUserId(req, res) {
 }
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "backend" }));
+
+function isOpenOrderStatus(status) {
+    return OPEN_ORDER_STATUSES.includes(String(status || "").toUpperCase());
+}
+
+function normalizeSymbolParam(value) {
+    return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
+function decimalBoundaryString(value) {
+    if (value === undefined || value === null) return null;
+    return String(value);
+}
+
+function timestampBoundaryString(value) {
+    return value?.toISOString?.() || value || null;
+}
+
+function latestEventsByOrderId(events) {
+    const latestByOrderId = new Map();
+    for (const ev of events) {
+        if (!latestByOrderId.has(ev.orderId)) {
+            latestByOrderId.set(ev.orderId, ev);
+        }
+    }
+    return latestByOrderId;
+}
+
+function formatOrderEvent(event) {
+    return {
+        id: event.id,
+        orderId: event.orderId,
+        status: event.status,
+        price: decimalBoundaryString(event.price),
+        quantity: decimalBoundaryString(event.quantity),
+        timestamp: timestampBoundaryString(event.timestamp),
+        createdAt: timestampBoundaryString(event.createdAt),
+    };
+}
+
+function formatOrderCommand(command, latest = null) {
+    return {
+        orderId: command.orderId,
+        symbol: command.symbol,
+        side: command.side,
+        orderType: command.type,
+        quantity: decimalBoundaryString(command.quantity),
+        price: decimalBoundaryString(command.price),
+        stopPrice: decimalBoundaryString(command.stopPrice),
+        timeInForce: command.timeInForce || null,
+        status: latest?.status || command.status,
+        rawStatus: command.rawStatus || null,
+        executedQty: decimalBoundaryString(command.executedQty),
+        cummulativeQuoteQty: decimalBoundaryString(command.cummulativeQuoteQty),
+        avgFillPrice: decimalBoundaryString(command.avgFillPrice),
+        lastTradeQty: decimalBoundaryString(command.lastTradeQty),
+        lastTradePrice: decimalBoundaryString(command.lastTradePrice),
+        binanceOrderId: decimalBoundaryString(command.binanceOrderId),
+        errorCode: command.errorCode || null,
+        errorMsg: command.errorMsg || null,
+        submittedAt: timestampBoundaryString(command.submittedAt),
+        lastExchangeUpdateAt: timestampBoundaryString(command.lastExchangeUpdateAt),
+        timestamp: timestampBoundaryString(latest?.timestamp || command.updatedAt || command.createdAt),
+        createdAt: timestampBoundaryString(command.createdAt),
+        updatedAt: timestampBoundaryString(command.updatedAt),
+    };
+}
+
+async function createOrderLifecycleEvent({ order, status, timestamp = new Date() }) {
+    return prisma.orderEvent.create({
+        data: {
+            orderId: order.orderId,
+            userId: order.userId,
+            status,
+            price: order.avgFillPrice ?? order.price ?? null,
+            quantity: order.executedQty ?? order.quantity ?? null,
+            timestamp,
+        },
+    });
+}
 
 function sendAuthError(res, err, fallback = "Server error") {
     if (err?.code === "P2002") {
@@ -244,6 +339,247 @@ app.get("/orders", requireAuth, async (req, res) => {
             return res.json({ ok: true, items: [], nextCursor: null, totalEntries, totalPages });
         }
         console.error(e);
+        return res.status(500).json({ ok: false, error: "Server error" });
+    }
+});
+
+app.get("/orders/open", requireAuth, async (req, res) => {
+    try {
+        if (rejectClientUserId(req, res)) return;
+
+        const symbol = normalizeSymbolParam(req.query?.symbol);
+        const commands = await prisma.orderCommand.findMany({
+            where: {
+                userId: req.user.id,
+                status: { in: OPEN_ORDER_STATUSES },
+                ...(symbol ? { symbol } : {}),
+            },
+            orderBy: { createdAt: "desc" },
+        });
+
+        if (commands.length === 0) {
+            return res.json({ ok: true, items: [], count: 0, symbol: symbol || null });
+        }
+
+        const orderIds = commands.map((command) => command.orderId);
+        const events = await prisma.orderEvent.findMany({
+            where: {
+                userId: req.user.id,
+                orderId: { in: orderIds },
+            },
+            orderBy: { timestamp: "desc" },
+        });
+        const latestByOrderId = latestEventsByOrderId(events);
+
+        const items = commands.map((command) => formatOrderCommand(command, latestByOrderId.get(command.orderId)));
+        return res.json({ ok: true, items, count: items.length, symbol: symbol || null });
+    } catch (e) {
+        console.error("[backend] /orders/open error:", safeErrorMessage(e));
+        return res.status(500).json({ ok: false, error: "Server error" });
+    }
+});
+
+app.get("/orders/:orderId", requireAuth, async (req, res) => {
+    try {
+        if (rejectClientUserId(req, res)) return;
+
+        const orderId = String(req.params.orderId || "").trim();
+        if (!orderId) {
+            return res.status(400).json({ ok: false, error: "orderId is required" });
+        }
+
+        const command = await prisma.orderCommand.findUnique({ where: { orderId } });
+        if (!command || command.userId !== req.user.id) {
+            return res.status(404).json({ ok: false, error: "Order not found" });
+        }
+
+        const events = await prisma.orderEvent.findMany({
+            where: {
+                userId: req.user.id,
+                orderId,
+            },
+            orderBy: { timestamp: "desc" },
+        });
+
+        return res.json({
+            ok: true,
+            order: formatOrderCommand(command, events[0] || null),
+            events: events.map(formatOrderEvent),
+        });
+    } catch (e) {
+        console.error("[backend] /orders/:orderId error:", safeErrorMessage(e));
+        return res.status(500).json({ ok: false, error: "Server error" });
+    }
+});
+
+app.delete("/orders/open", requireAuth, async (req, res) => {
+    try {
+        if (rejectClientUserId(req, res)) return;
+
+        const draft = createOrderCancelAllDraftFromRequest({
+            body: req.body || {},
+            query: req.query || {},
+            userId: req.user.id,
+            commandId: randomUUID(),
+            requestId: getRequestIdFromHeaders(req.headers),
+        });
+
+        const openOrders = await prisma.orderCommand.findMany({
+            where: {
+                userId: req.user.id,
+                symbol: draft.symbol,
+                status: { in: OPEN_ORDER_STATUSES },
+            },
+            orderBy: { createdAt: "desc" },
+        });
+
+        const requestedAt = new Date();
+        for (const order of openOrders) {
+            await prisma.orderCommand.update({
+                where: { orderId: order.orderId },
+                data: {
+                    status: "CANCEL_REQUESTED",
+                    errorCode: null,
+                    errorMsg: null,
+                },
+            });
+            await createOrderLifecycleEvent({ order, status: "CANCEL_REQUESTED", timestamp: requestedAt });
+        }
+
+        try {
+            await appendOrderCommandStreamEntry({
+                redis,
+                streamName: ORDER_COMMAND_STREAM,
+                streamEntry: draft.streamEntry,
+            });
+        } catch (e) {
+            console.error("[backend] /orders/open cancel-all stream append error:", safeErrorMessage(e));
+            for (const order of openOrders) {
+                await prisma.orderCommand.update({
+                    where: { orderId: order.orderId },
+                    data: {
+                        status: "CANCEL_APPEND_FAILED",
+                        errorMsg: "Redis stream append failed",
+                    },
+                }).catch((updateError) => {
+                    console.error("[backend] cancel-all failure status update error:", safeErrorMessage(updateError));
+                });
+                await createOrderLifecycleEvent({ order, status: "CANCEL_APPEND_FAILED" }).catch((eventError) => {
+                    console.error("[backend] cancel-all failure event create error:", safeErrorMessage(eventError));
+                });
+            }
+
+            return res.status(503).json({
+                ok: false,
+                error: "Cancel-all command persisted but stream append failed",
+            });
+        }
+
+        return res.status(202).json({
+            ok: true,
+            commandId: draft.commandId,
+            symbol: draft.symbol,
+            status: "CANCEL_REQUESTED",
+            affectedCount: openOrders.length,
+            affectedOrderIds: openOrders.map((order) => order.orderId),
+        });
+    } catch (e) {
+        if (e?.statusCode) {
+            return res.status(e.statusCode).json({ ok: false, error: e.message });
+        }
+        console.error("[backend] /orders/open cancel-all error:", safeErrorMessage(e));
+        return res.status(500).json({ ok: false, error: "Server error" });
+    }
+});
+
+app.delete("/orders/:orderId", requireAuth, async (req, res) => {
+    try {
+        if (rejectClientUserId(req, res)) return;
+
+        const orderId = String(req.params.orderId || "").trim();
+        if (!orderId) {
+            return res.status(400).json({ ok: false, error: "orderId is required" });
+        }
+
+        const existing = await prisma.orderCommand.findUnique({ where: { orderId } });
+        if (!existing || existing.userId !== req.user.id) {
+            return res.status(404).json({ ok: false, error: "Order not found" });
+        }
+
+        if (CANCEL_IN_FLIGHT_STATUSES.has(String(existing.status || "").toUpperCase())) {
+            return res.status(202).json({
+                ok: true,
+                orderId,
+                status: existing.status,
+                idempotent: true,
+            });
+        }
+
+        if (!isOpenOrderStatus(existing.status)) {
+            return res.status(409).json({
+                ok: false,
+                error: `Order cannot be canceled from status ${existing.status}`,
+            });
+        }
+
+        const draft = createOrderCancelDraftFromRequest({
+            body: req.body || {},
+            userId: req.user.id,
+            orderId,
+            symbol: existing.symbol,
+            commandId: randomUUID(),
+            requestId: getRequestIdFromHeaders(req.headers),
+        });
+
+        const requestedAt = new Date();
+        await prisma.orderCommand.update({
+            where: { orderId },
+            data: {
+                status: "CANCEL_REQUESTED",
+                errorCode: null,
+                errorMsg: null,
+            },
+        });
+        await createOrderLifecycleEvent({ order: existing, status: "CANCEL_REQUESTED", timestamp: requestedAt });
+
+        try {
+            await appendOrderCommandStreamEntry({
+                redis,
+                streamName: ORDER_COMMAND_STREAM,
+                streamEntry: draft.streamEntry,
+            });
+        } catch (e) {
+            console.error("[backend] /orders/:orderId cancel stream append error:", safeErrorMessage(e));
+            await prisma.orderCommand.update({
+                where: { orderId },
+                data: {
+                    status: "CANCEL_APPEND_FAILED",
+                    errorMsg: "Redis stream append failed",
+                },
+            }).catch((updateError) => {
+                console.error("[backend] cancel failure status update error:", safeErrorMessage(updateError));
+            });
+            await createOrderLifecycleEvent({ order: existing, status: "CANCEL_APPEND_FAILED" }).catch((eventError) => {
+                console.error("[backend] cancel failure event create error:", safeErrorMessage(eventError));
+            });
+
+            return res.status(503).json({
+                ok: false,
+                error: "Cancel command persisted but stream append failed",
+            });
+        }
+
+        return res.status(202).json({
+            ok: true,
+            commandId: draft.commandId,
+            orderId,
+            status: "CANCEL_REQUESTED",
+        });
+    } catch (e) {
+        if (e?.statusCode) {
+            return res.status(e.statusCode).json({ ok: false, error: e.message });
+        }
+        console.error("[backend] /orders/:orderId cancel error:", safeErrorMessage(e));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });

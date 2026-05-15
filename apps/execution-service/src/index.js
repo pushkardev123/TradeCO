@@ -303,7 +303,9 @@ function mapBinanceOrderStatusToLocal(X) {
     const s = String(X || "").toUpperCase();
     if (s === "FILLED") return "FILLED";
     if (s === "PARTIALLY_FILLED" || s === "NEW") return "PARTIALLY_FILLED";
-    if (s === "CANCELED" || s === "REJECTED" || s === "EXPIRED") return "REJECTED";
+    if (s === "CANCELED") return "CANCELED";
+    if (s === "REJECTED") return "REJECTED";
+    if (s === "EXPIRED") return "EXPIRED";
     return "PARTIALLY_FILLED";
 }
 
@@ -728,6 +730,49 @@ async function executeBinanceOrder({ apiKey, secretKey, symbol, side, orderType,
     });
 }
 
+async function executeBinanceCancelOrder({ apiKey, secretKey, symbol, orderId, binanceOrderId }) {
+    const params = {
+        symbol: String(symbol || "").toUpperCase(),
+        timestamp: Date.now(),
+        recvWindow: 5000,
+    };
+
+    if (binanceOrderId !== undefined && binanceOrderId !== null && binanceOrderId !== "") {
+        params.orderId = binanceOrderId;
+    } else {
+        params.origClientOrderId = String(orderId || "");
+    }
+
+    if (!params.symbol) throw new Error("symbol is required");
+    if (!params.orderId && !params.origClientOrderId) throw new Error("orderId is required");
+
+    const query = querystring.stringify(params);
+    const signature = signQuery(query, secretKey);
+    return binanceRequest({
+        method: "DELETE",
+        path: `/api/v3/order?${query}&signature=${signature}`,
+        apiKey,
+    });
+}
+
+async function executeBinanceCancelAllOrders({ apiKey, secretKey, symbol }) {
+    const params = {
+        symbol: String(symbol || "").toUpperCase(),
+        timestamp: Date.now(),
+        recvWindow: 5000,
+    };
+
+    if (!params.symbol) throw new Error("symbol is required");
+
+    const query = querystring.stringify(params);
+    const signature = signQuery(query, secretKey);
+    return binanceRequest({
+        method: "DELETE",
+        path: `/api/v3/openOrders?${query}&signature=${signature}`,
+        apiKey,
+    });
+}
+
 async function main() {
     logStartupConfig();
 
@@ -895,6 +940,8 @@ async function main() {
         loadActiveExchangeCredential,
         startUserDataStream,
         executeBinanceOrder,
+        executeBinanceCancelOrder,
+        executeBinanceCancelAllOrders,
     });
 
     const streamConsumer = startOrderStreamConsumer({

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+    normalizeExecutionCancelAllCommand,
+    normalizeExecutionCancelCommand,
     normalizeExecutionOrderCommand,
     parseLegacyOrderCommandMessage,
     processOrderCommand,
@@ -19,9 +21,27 @@ function createMemoryPrisma(existingCommands = []) {
                 const row = commands.get(where.orderId);
                 return row ? { ...row } : null;
             },
+            findMany: async ({ where, orderBy } = {}) => {
+                let rows = Array.from(commands.values());
+                if (where?.userId !== undefined) rows = rows.filter((row) => row.userId === where.userId);
+                if (where?.symbol !== undefined) rows = rows.filter((row) => row.symbol === where.symbol);
+                if (where?.status?.in) rows = rows.filter((row) => where.status.in.includes(row.status));
+                if (where?.orderId?.in) rows = rows.filter((row) => where.orderId.in.includes(row.orderId));
+                if (orderBy?.createdAt === "desc") {
+                    rows = rows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+                }
+                return rows.map((row) => ({ ...row }));
+            },
             upsert: async ({ where, update, create }) => {
                 const existing = commands.get(where.orderId);
                 const next = existing ? { ...existing, ...update } : { ...create };
+                commands.set(where.orderId, next);
+                return { ...next };
+            },
+            update: async ({ where, data }) => {
+                const existing = commands.get(where.orderId);
+                if (!existing) throw new Error("OrderCommand not found");
+                const next = { ...existing, ...data };
                 commands.set(where.orderId, next);
                 return { ...next };
             },
@@ -216,4 +236,130 @@ test("skips already submitted commands before placing another Binance order", as
     assert.equal(pub.messages[0].message.status, "SUBMITTED");
     assert.equal(pub.messages[0].message.quantity, 0.001);
     assert.equal(pub.messages[0].message.binance.orderId, 98765);
+});
+
+test("cancels one open order through Binance and publishes scoped lifecycle events", async () => {
+    const pub = createPub();
+    const prisma = createMemoryPrisma([{
+        orderId: "order_123",
+        userId: "user_123",
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: 0.001,
+        price: 65000,
+        status: "SUBMITTED",
+        binanceOrderId: 98765,
+        createdAt: new Date("2026-05-16T00:00:00.000Z"),
+    }]);
+    const startedUserStreams = [];
+    const canceled = [];
+
+    const result = await processOrderCommand({
+        command: normalizeExecutionCancelCommand({
+            commandId: "cancel_123",
+            orderId: "order_123",
+            userId: "user_123",
+            symbol: "btcusdt",
+        }),
+        prisma,
+        pub,
+        eventsChannel: "events:order:status",
+        loadActiveExchangeCredential: async () => ({ apiKey: "api-key", secretKey: "secret-key" }),
+        startUserDataStream: (args) => startedUserStreams.push(args),
+        executeBinanceCancelOrder: async (args) => {
+            canceled.push(args);
+            return {
+                symbol: "BTCUSDT",
+                orderId: args.binanceOrderId,
+                origClientOrderId: args.orderId,
+                status: "CANCELED",
+                executedQty: "0.000",
+                cummulativeQuoteQty: "0.000",
+                updateTime: Date.parse("2026-05-16T00:00:05.000Z"),
+            };
+        },
+    });
+
+    assert.equal(result.outcome, "canceled");
+    assert.equal(startedUserStreams[0].userId, "user_123");
+    assert.equal(canceled[0].symbol, "BTCUSDT");
+    assert.equal(canceled[0].orderId, "order_123");
+    assert.equal(canceled[0].binanceOrderId, 98765);
+    assert.equal(prisma.commands.get("order_123").status, "CANCELED");
+    assert.equal(prisma.commands.get("order_123").rawStatus, "CANCELED");
+    assert.equal(prisma.events[0].status, "CANCEL_PENDING");
+    assert.equal(prisma.events[1].status, "CANCELED");
+    assert.equal(pub.messages.at(-1).message.userId, "user_123");
+    assert.equal(pub.messages.at(-1).message.status, "CANCELED");
+    assert.doesNotMatch(JSON.stringify(pub.messages), /api-key|secret-key|signature|token/i);
+});
+
+test("cancel-all cancels local open orders returned by Binance", async () => {
+    const pub = createPub();
+    const prisma = createMemoryPrisma([
+        {
+            orderId: "order_a",
+            userId: "user_123",
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "LIMIT",
+            quantity: 0.001,
+            status: "SUBMITTED",
+            binanceOrderId: 111,
+            createdAt: new Date("2026-05-16T00:00:00.000Z"),
+        },
+        {
+            orderId: "order_b",
+            userId: "user_123",
+            symbol: "BTCUSDT",
+            side: "SELL",
+            type: "LIMIT",
+            quantity: 0.002,
+            status: "PARTIALLY_FILLED",
+            binanceOrderId: 222,
+            createdAt: new Date("2026-05-16T00:00:01.000Z"),
+        },
+        {
+            orderId: "order_other_symbol",
+            userId: "user_123",
+            symbol: "ETHUSDT",
+            side: "BUY",
+            type: "LIMIT",
+            quantity: 0.01,
+            status: "SUBMITTED",
+            binanceOrderId: 333,
+            createdAt: new Date("2026-05-16T00:00:02.000Z"),
+        },
+    ]);
+    const canceledAll = [];
+
+    const result = await processOrderCommand({
+        command: normalizeExecutionCancelAllCommand({
+            commandId: "cancel_all_123",
+            userId: "user_123",
+            symbol: "btcusdt",
+        }),
+        prisma,
+        pub,
+        eventsChannel: "events:order:status",
+        loadActiveExchangeCredential: async () => ({ apiKey: "api-key", secretKey: "secret-key" }),
+        startUserDataStream: () => {},
+        executeBinanceCancelAllOrders: async (args) => {
+            canceledAll.push(args);
+            return [
+                { symbol: "BTCUSDT", orderId: 111, origClientOrderId: "order_a", status: "CANCELED", executedQty: "0", cummulativeQuoteQty: "0" },
+                { symbol: "BTCUSDT", orderId: 222, origClientOrderId: "order_b", status: "CANCELED", executedQty: "0.001", cummulativeQuoteQty: "65.00" },
+            ];
+        },
+    });
+
+    assert.equal(result.outcome, "cancel-all-submitted");
+    assert.equal(result.affectedCount, 2);
+    assert.equal(result.canceledCount, 2);
+    assert.equal(canceledAll[0].symbol, "BTCUSDT");
+    assert.equal(prisma.commands.get("order_a").status, "CANCELED");
+    assert.equal(prisma.commands.get("order_b").status, "CANCELED");
+    assert.equal(prisma.commands.get("order_other_symbol").status, "SUBMITTED");
+    assert.equal(pub.messages.filter((message) => message.message.status === "CANCELED").length, 2);
 });

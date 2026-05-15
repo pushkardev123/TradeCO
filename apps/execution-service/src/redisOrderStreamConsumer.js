@@ -1,6 +1,6 @@
 import {
     buildOrderCommandDeadLetterEntry,
-    parseOrderSubmitStreamEntry,
+    parseOrderCommandStreamEntry,
 } from "@tradeco/redis-stream-contracts";
 
 const DEFAULT_BLOCK_MS = 5000;
@@ -104,7 +104,7 @@ export async function handleOrderStreamMessage({
     let command;
 
     try {
-        command = parseOrderSubmitStreamEntry(message.fields);
+        command = parseOrderCommandStreamEntry(message.fields);
     } catch (error) {
         await writeDeadLetterAndAck({
             redis,

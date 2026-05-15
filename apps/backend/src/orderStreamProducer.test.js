@@ -7,7 +7,10 @@ process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/tradeco_test";
 process.env.REDIS_URL = "redis://localhost:6379";
 
 const {
+    appendOrderCommandStreamEntry,
     appendOrderSubmitStreamEntry,
+    createOrderCancelAllDraftFromRequest,
+    createOrderCancelDraftFromRequest,
     createOrderSubmitDraftFromRequest,
     getRequestIdFromHeaders,
     isSameOrderIntent,
@@ -84,6 +87,76 @@ test("appends stream entry with Redis XADD using configured stream name", async 
     });
 
     assert.equal(streamId, "1715712000000-0");
+    assert.deepEqual(calls, [{
+        streamName: "orders:commands:test",
+        id: "*",
+        entry: streamEntry,
+    }]);
+});
+
+test("builds cancel command without trusting body userId", () => {
+    const draft = createOrderCancelDraftFromRequest({
+        userId: "auth_user_123",
+        orderId: "order_123",
+        symbol: "btcusdt",
+        commandId: "cancel_123",
+        requestId: "req_cancel",
+        createdAt: new Date("2026-05-16T00:00:00.000Z"),
+        body: {
+            userId: "attacker_user",
+            symbol: "ethusdt",
+        },
+    });
+
+    assert.equal(draft.userId, "auth_user_123");
+    assert.equal(draft.symbol, "BTCUSDT");
+    assert.equal(draft.streamEntry.messageType, "order.cancel.requested.v1");
+    assert.equal(draft.streamEntry.commandId, "cancel_123");
+    assert.equal(draft.streamEntry.orderId, "order_123");
+    assert.equal(draft.streamEntry.userId, "auth_user_123");
+    assert.equal(draft.streamEntry.symbol, "BTCUSDT");
+    assert.doesNotMatch(JSON.stringify(draft.streamEntry), /attacker_user/i);
+});
+
+test("builds cancel-all command for authenticated user and symbol", () => {
+    const draft = createOrderCancelAllDraftFromRequest({
+        userId: "auth_user_123",
+        commandId: "cancel_all_123",
+        requestId: "req_cancel_all",
+        createdAt: new Date("2026-05-16T00:00:00.000Z"),
+        query: {
+            userId: "attacker_user",
+            symbol: "ethusdt",
+        },
+    });
+
+    assert.equal(draft.userId, "auth_user_123");
+    assert.equal(draft.symbol, "ETHUSDT");
+    assert.equal(draft.streamEntry.messageType, "order.cancel_all.requested.v1");
+    assert.equal(draft.streamEntry.commandId, "cancel_all_123");
+    assert.equal(draft.streamEntry.userId, "auth_user_123");
+    assert.equal(draft.streamEntry.symbol, "ETHUSDT");
+    assert.equal(draft.streamEntry.orderId, undefined);
+    assert.doesNotMatch(JSON.stringify(draft.streamEntry), /attacker_user/i);
+});
+
+test("appends generic lifecycle stream entries", async () => {
+    const calls = [];
+    const redis = {
+        async xAdd(streamName, id, entry) {
+            calls.push({ streamName, id, entry });
+            return "1715712000000-2";
+        },
+    };
+
+    const streamEntry = { schemaVersion: "1", messageType: "order.cancel.requested.v1" };
+    const streamId = await appendOrderCommandStreamEntry({
+        redis,
+        streamName: "orders:commands:test",
+        streamEntry,
+    });
+
+    assert.equal(streamId, "1715712000000-2");
     assert.deepEqual(calls, [{
         streamName: "orders:commands:test",
         id: "*",

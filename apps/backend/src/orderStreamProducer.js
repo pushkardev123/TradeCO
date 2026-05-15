@@ -1,4 +1,8 @@
-import { buildOrderSubmitStreamEntry } from "@tradeco/redis-stream-contracts";
+import {
+    buildOrderCancelAllStreamEntry,
+    buildOrderCancelStreamEntry,
+    buildOrderSubmitStreamEntry,
+} from "@tradeco/redis-stream-contracts";
 
 const ORDER_TYPE_ALIASES = Object.freeze({
     STOP_MARKET: "STOP_LOSS",
@@ -66,8 +70,109 @@ export function createOrderSubmitDraftFromRequest({
     };
 }
 
-export async function appendOrderSubmitStreamEntry({ redis, streamName, streamEntry }) {
+export function createOrderCancelDraftFromRequest({
+    body = {},
+    userId,
+    orderId,
+    symbol,
+    commandId,
+    requestId,
+    createdAt = new Date(),
+} = {}) {
+    const normalizedOrderId = optionalString(orderId || body.orderId || body.id);
+    const normalizedSymbol = normalizeToken(symbol || body.symbol);
+    const normalizedCommandId = optionalString(commandId) || normalizedOrderId;
+    const createdAtIso = toIsoString(createdAt);
+
+    if (!normalizedOrderId) {
+        throw badRequest("orderId is required");
+    }
+
+    if (!normalizedSymbol) {
+        throw badRequest("symbol is required");
+    }
+
+    const command = {
+        commandId: normalizedCommandId,
+        orderId: normalizedOrderId,
+        userId,
+        symbol: normalizedSymbol,
+        requestId: optionalString(requestId),
+        source: "backend",
+        createdAt: createdAtIso,
+        metadata: {},
+    };
+
+    let streamEntry;
+    try {
+        streamEntry = buildOrderCancelStreamEntry(command);
+    } catch (error) {
+        throw badRequest(error?.message || "Invalid order cancel command");
+    }
+
+    return {
+        commandId: normalizedCommandId,
+        orderId: normalizedOrderId,
+        userId,
+        symbol: normalizedSymbol,
+        createdAt: createdAtIso,
+        streamEntry,
+    };
+}
+
+export function createOrderCancelAllDraftFromRequest({
+    body = {},
+    query = {},
+    userId,
+    symbol,
+    commandId,
+    requestId,
+    createdAt = new Date(),
+} = {}) {
+    const normalizedSymbol = normalizeToken(symbol || body.symbol || query.symbol);
+    const normalizedCommandId = optionalString(commandId);
+    const createdAtIso = toIsoString(createdAt);
+
+    if (!normalizedSymbol) {
+        throw badRequest("symbol is required");
+    }
+
+    if (!normalizedCommandId) {
+        throw badRequest("commandId is required");
+    }
+
+    const command = {
+        commandId: normalizedCommandId,
+        userId,
+        symbol: normalizedSymbol,
+        requestId: optionalString(requestId),
+        source: "backend",
+        createdAt: createdAtIso,
+        metadata: {},
+    };
+
+    let streamEntry;
+    try {
+        streamEntry = buildOrderCancelAllStreamEntry(command);
+    } catch (error) {
+        throw badRequest(error?.message || "Invalid order cancel-all command");
+    }
+
+    return {
+        commandId: normalizedCommandId,
+        userId,
+        symbol: normalizedSymbol,
+        createdAt: createdAtIso,
+        streamEntry,
+    };
+}
+
+export async function appendOrderCommandStreamEntry({ redis, streamName, streamEntry }) {
     return redis.xAdd(streamName, "*", streamEntry);
+}
+
+export async function appendOrderSubmitStreamEntry({ redis, streamName, streamEntry }) {
+    return appendOrderCommandStreamEntry({ redis, streamName, streamEntry });
 }
 
 export function isSameOrderIntent(existingCommand, orderDraft) {
