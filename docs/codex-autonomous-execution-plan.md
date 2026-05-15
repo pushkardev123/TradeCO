@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 02:57 IST
+Last updated: 2026-05-16 03:03 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `9ce4698` (`Extract Binance Spot Testnet client`)
+- Current pushed commit: `b7d62b0` (`Replace trading floats with decimals`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -26,6 +26,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | --- | --- | --- |
 | `4c2237a` | Add Docker Compose local stack | One-command Docker stack, deployment docs, nginx sample, PM2 config, production env template, frontend build font fix. |
 | `9ce4698` | Extract Binance client module | Centralized Binance Spot Testnet REST client, signing, safe errors, rate-limit metadata, execution-service refactor. |
+| `b7d62b0` | Replace Float math with Decimal/string-safe trading values | Prisma Decimal migration, normalized decimal string service boundaries, Decimal-safe execution/account/position math, full compose verification. |
 
 ## Working Rules
 
@@ -102,6 +103,31 @@ This sequence will be reconciled against Notion before each item starts.
   - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build`: pass.
   - Compose migration log: `20260516000000_decimal_trading_values` applied successfully.
   - Compose Postgres schema check: 13 trading columns are `numeric(36,18)`.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
+  - `npm run smoke:p0-auth-boundary`: pass.
+
+### Active: Add order and account reconciliation worker
+
+- Notion page: `3608ea2b-3f8a-8135-8894-c8b5736c4939`
+- Status at start: `Not started`, `P1`, medium risk.
+- Branch: `main`
+- Started: 2026-05-16 03:00 IST
+- Goal: recover order/account state after missed Binance websocket events, execution-service restarts, or stale local order rows.
+- Implementation:
+  - Added signed Binance read methods for order query, open orders, all orders, and my trades.
+  - Added execution-service reconciliation worker with configurable enabled/interval/stale/batch settings.
+  - Reconciles stale local open/in-flight orders against Binance order state, backfills fill quantities/prices, creates scoped order events, and publishes recovery events.
+  - Publishes account balance snapshots for users touched by reconciliation.
+  - Added deterministic mocked tests; no live Binance credentials required for QA.
+- Verification:
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `node --check apps/execution-service/src/index.js`: pass.
+  - `node --check apps/execution-service/src/reconciliationWorker.js`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml config --quiet`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build`: pass.
+  - Execution-service Docker log shows reconciliation enabled with interval `60000`, stale window `30000`, batch size `100`.
   - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
   - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
   - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.

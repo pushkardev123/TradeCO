@@ -9,6 +9,7 @@ import {
     processOrderCommand,
 } from "./orderCommandProcessor.js";
 import { startOrderStreamConsumer } from "./redisOrderStreamConsumer.js";
+import { startReconciliationWorker } from "./reconciliationWorker.js";
 import {
     addDecimalStrings,
     decimalOrZero,
@@ -42,6 +43,10 @@ const DEFAULT_KLINE_INTERVAL = config.defaultKlineInterval;
 const ACCOUNT_REQ_CHANNEL = config.accountReqChannel;
 const ACCOUNT_RES_CHANNEL = config.accountResChannel;
 const ACCOUNT_CACHE_MS = config.accountCacheMs;
+const RECONCILIATION_ENABLED = config.reconciliationEnabled;
+const RECONCILIATION_INTERVAL_MS = config.reconciliationIntervalMs;
+const RECONCILIATION_STALE_MS = config.reconciliationStaleMs;
+const RECONCILIATION_BATCH_SIZE = config.reconciliationBatchSize;
 
 // Symbol metadata RPC (event-service -> execution-service)
 const SYMBOL_REQ_CHANNEL = config.symbolReqChannel;
@@ -546,6 +551,14 @@ async function fetchBinanceAccount({ apiKey, secretKey }) {
     return binanceClient.getAccount({ apiKey, secretKey });
 }
 
+async function fetchBinanceOrder({ apiKey, secretKey, symbol, orderId, binanceOrderId }) {
+    return binanceClient.getOrder({ apiKey, secretKey, symbol, orderId, binanceOrderId });
+}
+
+async function fetchBinanceMyTrades({ apiKey, secretKey, symbol, orderId, startTime, endTime, fromId, limit }) {
+    return binanceClient.getMyTrades({ apiKey, secretKey, symbol, orderId, startTime, endTime, fromId, limit });
+}
+
 function normalizeBalances(balances) {
     const out = [];
     for (const b of balances || []) {
@@ -782,6 +795,22 @@ async function main() {
         safeErrorMessage,
     });
 
+    const reconciliationWorker = startReconciliationWorker({
+        enabled: RECONCILIATION_ENABLED,
+        intervalMs: RECONCILIATION_INTERVAL_MS,
+        staleMs: RECONCILIATION_STALE_MS,
+        batchSize: RECONCILIATION_BATCH_SIZE,
+        prisma,
+        pub,
+        eventsChannel: EVENTS_CHANNEL,
+        balancesChannel: BALANCES_CHANNEL,
+        loadActiveExchangeCredential,
+        fetchOrder: fetchBinanceOrder,
+        fetchMyTrades: fetchBinanceMyTrades,
+        fetchAccount: fetchBinanceAccount,
+        logger: console,
+    });
+
     if (LEGACY_COMMANDS_CHANNEL_ENABLED) {
         await sub.subscribe(COMMANDS_CHANNEL, async (message) => {
             let command;
@@ -803,6 +832,7 @@ async function main() {
     const shutdown = async () => {
         for (const [uid, entry] of userStreams.entries()) { try { clearInterval(entry.keepAliveTimer); entry.ws?.close(); } catch { } userStreams.delete(uid); }
         streamConsumer.stop();
+        reconciliationWorker.stop();
         try { await sub.quit(); await pub.quit(); await stream.quit(); await prisma.$disconnect(); } catch { }
         process.exit(0);
     };

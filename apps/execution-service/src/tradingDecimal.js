@@ -21,6 +21,15 @@ export function isPositiveDecimal(value) {
     return new Prisma.Decimal(normalized).gt(0);
 }
 
+export function decimalValuesEqual(left, right) {
+    const normalizedLeft = decimalString(left);
+    const normalizedRight = decimalString(right);
+    if (normalizedLeft === null || normalizedRight === null) {
+        return normalizedLeft === normalizedRight;
+    }
+    return new Prisma.Decimal(normalizedLeft).equals(normalizedRight);
+}
+
 export function addDecimalStrings(left, right) {
     return decimalOrZero(left).plus(decimalOrZero(right)).toFixed();
 }

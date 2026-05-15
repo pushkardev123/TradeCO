@@ -218,6 +218,54 @@ export class BinanceSpotTestnetClient {
         return data;
     }
 
+    async getOrder(options = {}) {
+        const params = buildGetOrderRequestParams(options);
+        const { data } = await this.signedGet({
+            path: "/api/v3/order",
+            apiKey: options.apiKey,
+            secretKey: options.secretKey,
+            params,
+        });
+
+        return data;
+    }
+
+    async getOpenOrders(options = {}) {
+        const params = buildOpenOrdersRequestParams(options);
+        const { data } = await this.signedGet({
+            path: "/api/v3/openOrders",
+            apiKey: options.apiKey,
+            secretKey: options.secretKey,
+            params,
+        });
+
+        return data;
+    }
+
+    async getAllOrders(options = {}) {
+        const params = buildAllOrdersRequestParams(options);
+        const { data } = await this.signedGet({
+            path: "/api/v3/allOrders",
+            apiKey: options.apiKey,
+            secretKey: options.secretKey,
+            params,
+        });
+
+        return data;
+    }
+
+    async getMyTrades(options = {}) {
+        const params = buildMyTradesRequestParams(options);
+        const { data } = await this.signedGet({
+            path: "/api/v3/myTrades",
+            apiKey: options.apiKey,
+            secretKey: options.secretKey,
+            params,
+        });
+
+        return data;
+    }
+
     async placeOrder(options = {}) {
         const params = buildOrderRequestParams(options);
         const { data } = await this.signedPost({
@@ -366,6 +414,59 @@ export function buildCancelAllOrdersRequestParams({ symbol } = {}) {
     return {
         symbol: normalizeSymbol(symbol),
     };
+}
+
+export function buildGetOrderRequestParams({ symbol, orderId, binanceOrderId } = {}) {
+    const params = {
+        symbol: normalizeSymbol(symbol),
+    };
+
+    if (binanceOrderId !== undefined && binanceOrderId !== null && binanceOrderId !== "") {
+        params.orderId = binanceOrderId;
+    } else {
+        params.origClientOrderId = String(orderId || "");
+    }
+
+    if (!params.orderId && !params.origClientOrderId) {
+        throw new Error("orderId is required");
+    }
+
+    return params;
+}
+
+export function buildOpenOrdersRequestParams({ symbol } = {}) {
+    const params = {};
+    if (symbol !== undefined && symbol !== null && String(symbol).trim() !== "") {
+        params.symbol = normalizeSymbol(symbol);
+    }
+    return params;
+}
+
+export function buildAllOrdersRequestParams({ symbol, orderId, startTime, endTime, limit = 500 } = {}) {
+    const params = {
+        symbol: normalizeSymbol(symbol),
+        limit: normalizeLimit(limit),
+    };
+
+    if (orderId !== undefined && orderId !== null && orderId !== "") params.orderId = orderId;
+    if (startTime !== undefined && startTime !== null && startTime !== "") params.startTime = startTime;
+    if (endTime !== undefined && endTime !== null && endTime !== "") params.endTime = endTime;
+
+    return params;
+}
+
+export function buildMyTradesRequestParams({ symbol, orderId, startTime, endTime, fromId, limit = 500 } = {}) {
+    const params = {
+        symbol: normalizeSymbol(symbol),
+        limit: normalizeLimit(limit),
+    };
+
+    if (orderId !== undefined && orderId !== null && orderId !== "") params.orderId = orderId;
+    if (startTime !== undefined && startTime !== null && startTime !== "") params.startTime = startTime;
+    if (endTime !== undefined && endTime !== null && endTime !== "") params.endTime = endTime;
+    if (fromId !== undefined && fromId !== null && fromId !== "") params.fromId = fromId;
+
+    return params;
 }
 
 export function getBinanceResponseMetadata(response) {
@@ -544,6 +645,12 @@ function normalizeRecvWindow(value) {
         throw new Error("recvWindow must be a positive integer");
     }
     return normalized;
+}
+
+function normalizeLimit(value) {
+    const normalized = Number(value);
+    if (!Number.isInteger(normalized)) return 500;
+    return Math.max(1, Math.min(normalized, 1000));
 }
 
 function normalizeSymbol(value) {

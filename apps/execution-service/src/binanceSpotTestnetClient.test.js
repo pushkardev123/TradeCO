@@ -205,3 +205,83 @@ test("constructs signed cancel and cancel-all DELETE requests", async () => {
         `https://testnet.binance.vision/api/v3/openOrders?${cancelAllQuery}&signature=${hmac(cancelAllQuery)}`,
     );
 });
+
+test("constructs signed order reconciliation read requests", async () => {
+    const { calls, transport } = createMockTransport([
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify({ orderId: 98765, status: "FILLED" }),
+        },
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify([{ id: 1, orderId: 98765, qty: "0.001", price: "65000" }]),
+        },
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify([{ orderId: 98765 }]),
+        },
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify([]),
+        },
+    ]);
+    const client = createBinanceSpotTestnetClient({
+        timestamp: () => FIXED_TS,
+        transport,
+    });
+
+    await client.getOrder({
+        apiKey: "api-key",
+        secretKey: "secret-key",
+        symbol: "btcusdt",
+        orderId: "local_order_123",
+        binanceOrderId: 98765,
+    });
+    await client.getMyTrades({
+        apiKey: "api-key",
+        secretKey: "secret-key",
+        symbol: "btcusdt",
+        orderId: 98765,
+        limit: 1000,
+    });
+    await client.getAllOrders({
+        apiKey: "api-key",
+        secretKey: "secret-key",
+        symbol: "btcusdt",
+        limit: 1000,
+    });
+    await client.getOpenOrders({
+        apiKey: "api-key",
+        secretKey: "secret-key",
+        symbol: "ethusdt",
+    });
+
+    const orderQuery = "symbol=BTCUSDT&orderId=98765&timestamp=1700000000000&recvWindow=5000";
+    assert.equal(calls[0].method, "GET");
+    assert.equal(
+        calls[0].url,
+        `https://testnet.binance.vision/api/v3/order?${orderQuery}&signature=${hmac(orderQuery)}`,
+    );
+
+    const tradesQuery = "symbol=BTCUSDT&limit=1000&orderId=98765&timestamp=1700000000000&recvWindow=5000";
+    assert.equal(
+        calls[1].url,
+        `https://testnet.binance.vision/api/v3/myTrades?${tradesQuery}&signature=${hmac(tradesQuery)}`,
+    );
+
+    const allOrdersQuery = "symbol=BTCUSDT&limit=1000&timestamp=1700000000000&recvWindow=5000";
+    assert.equal(
+        calls[2].url,
+        `https://testnet.binance.vision/api/v3/allOrders?${allOrdersQuery}&signature=${hmac(allOrdersQuery)}`,
+    );
+
+    const openOrdersQuery = "symbol=ETHUSDT&timestamp=1700000000000&recvWindow=5000";
+    assert.equal(
+        calls[3].url,
+        `https://testnet.binance.vision/api/v3/openOrders?${openOrdersQuery}&signature=${hmac(openOrdersQuery)}`,
+    );
+});

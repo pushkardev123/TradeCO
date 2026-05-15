@@ -148,6 +148,9 @@ const binanceWsBase = validateBinanceWsUrl(
 );
 const accountCacheMs = parseInteger("ACCOUNT_CACHE_MS", 5000, errors, { min: 0 });
 const symbolCacheMs = parseInteger("SYMBOL_CACHE_MS", 600000, errors, { min: 0 });
+const reconciliationIntervalMs = parseInteger("RECONCILIATION_INTERVAL_MS", 60000, errors, { min: 0 });
+const reconciliationStaleMs = parseInteger("RECONCILIATION_STALE_MS", 30000, errors, { min: 0 });
+const reconciliationBatchSize = parseInteger("RECONCILIATION_BATCH_SIZE", 100, errors, { min: 1, max: 500 });
 const marketMode = readEnv("MARKET_MODE", "all").toLowerCase();
 const symbols = parseSymbols(readEnv("SYMBOLS", "btcusdt"), errors);
 let orderStreamConfig = null;
@@ -192,6 +195,10 @@ export const config = Object.freeze({
     accountReqChannel: readEnv("ACCOUNT_REQ_CHANNEL", "events:account:request"),
     accountResChannel: readEnv("ACCOUNT_RES_CHANNEL", "events:account:response"),
     accountCacheMs,
+    reconciliationEnabled: parseBoolean("RECONCILIATION_ENABLED", true),
+    reconciliationIntervalMs,
+    reconciliationStaleMs,
+    reconciliationBatchSize,
     symbolReqChannel: readEnv("SYMBOL_REQ_CHANNEL", "events:symbol:request"),
     symbolResChannel: readEnv("SYMBOL_RES_CHANNEL", "events:symbol:response"),
     symbolCacheMs,
@@ -222,6 +229,10 @@ export function logStartupConfig() {
         marketMode: config.marketMode,
         symbols: config.symbols,
         accountCacheMs: config.accountCacheMs,
+        reconciliationEnabled: config.reconciliationEnabled,
+        reconciliationIntervalMs: config.reconciliationIntervalMs,
+        reconciliationStaleMs: config.reconciliationStaleMs,
+        reconciliationBatchSize: config.reconciliationBatchSize,
         symbolCacheMs: config.symbolCacheMs,
     });
 }
