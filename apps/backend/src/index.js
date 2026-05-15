@@ -28,6 +28,7 @@ import {
     isSameOrderIntent,
     shouldRetryStreamAppend,
 } from "./orderStreamProducer.js";
+import { addDecimalStrings, negateDecimalString } from "./tradingDecimal.js";
 
 const PORT = config.port;
 const REDIS_URL = config.redisUrl;
@@ -240,9 +241,9 @@ app.get("/positions", requireAuth, async (req, res) => {
         const items = rows.map((p) => ({
             id: p.id,
             symbol: p.symbol,
-            quantity: p.quantity,
-            avgPrice: p.avgPrice,
-            realizedPnl: p.realizedPnl,
+            quantity: decimalBoundaryString(p.quantity),
+            avgPrice: decimalBoundaryString(p.avgPrice),
+            realizedPnl: decimalBoundaryString(p.realizedPnl),
             updatedAt: p.updatedAt?.toISOString?.() || p.updatedAt,
             createdAt: p.createdAt?.toISOString?.() || p.createdAt,
         }));
@@ -318,9 +319,9 @@ app.get("/orders", requireAuth, async (req, res) => {
                 symbol: c.symbol,
                 side: c.side,
                 orderType: c.type,
-                quantity: c.quantity,
+                quantity: decimalBoundaryString(c.quantity),
                 status: latest?.status || c.status,
-                price: latest?.price ?? null,
+                price: decimalBoundaryString(latest?.price),
                 timestamp: (latest?.timestamp || c.createdAt)?.toISOString?.() || latest?.timestamp || c.createdAt,
                 createdAt: c.createdAt?.toISOString?.() || c.createdAt,
                 // Include rejection info if your schema has it later (e.g. rejectReason)
@@ -622,9 +623,9 @@ app.post("/orders", requireAuth, async (req, res) => {
                     symbol: orderDraft.symbol,
                     side: orderDraft.side,
                     type: orderDraft.orderType,
-                    quantity: Number(orderDraft.quantity),
-                    price: orderDraft.price === undefined ? null : Number(orderDraft.price),
-                    stopPrice: orderDraft.stopPrice === undefined ? null : Number(orderDraft.stopPrice),
+                    quantity: orderDraft.quantity,
+                    price: orderDraft.price === undefined ? null : orderDraft.price,
+                    stopPrice: orderDraft.stopPrice === undefined ? null : orderDraft.stopPrice,
                     timeInForce: orderDraft.timeInForce || null,
                     status: "RECEIVED",
                 },
@@ -829,9 +830,8 @@ app.get("/api/trading/positions", requireAuth, async (req, res) => {
             const cmd = cmdByOrderId.get(ev.orderId);
             if (!cmd) continue;
 
-            const q = Number(ev.quantity ?? 0);
-            const signed = cmd.side === "BUY" ? q : -q;
-            qtyBySymbol.set(cmd.symbol, (qtyBySymbol.get(cmd.symbol) || 0) + signed);
+            const quantity = cmd.side === "BUY" ? ev.quantity : negateDecimalString(ev.quantity);
+            qtyBySymbol.set(cmd.symbol, addDecimalStrings(qtyBySymbol.get(cmd.symbol) || "0", quantity));
         }
 
         const positions = Array.from(qtyBySymbol.entries()).map(([symbol, quantity]) => ({

@@ -9,6 +9,13 @@ import {
     processOrderCommand,
 } from "./orderCommandProcessor.js";
 import { startOrderStreamConsumer } from "./redisOrderStreamConsumer.js";
+import {
+    addDecimalStrings,
+    decimalOrZero,
+    decimalString,
+    divideDecimalStrings,
+    isPositiveDecimal,
+} from "./tradingDecimal.js";
 
 const REDIS_URL = config.redisUrl;
 const COMMANDS_CHANNEL = config.commandsChannel;
@@ -267,10 +274,13 @@ function mapBinanceOrderStatusToLocal(X) {
 }
 
 async function applyFillToPositions({ prisma, userId, symbol, side, fillQty, fillPrice }) {
-    const qty = Number(fillQty);
-    const price = Number(fillPrice);
-    if (!Number.isFinite(qty) || qty <= 0) return;
-    if (!Number.isFinite(price) || price <= 0) return;
+    const qtyValue = decimalString(fillQty);
+    const priceValue = decimalString(fillPrice);
+    if (!isPositiveDecimal(qtyValue)) return;
+    if (!isPositiveDecimal(priceValue)) return;
+
+    const qty = decimalOrZero(qtyValue);
+    const price = decimalOrZero(priceValue);
 
     const sym = String(symbol || "").toUpperCase();
     const sd = String(side || "").toUpperCase();
@@ -285,28 +295,28 @@ async function applyFillToPositions({ prisma, userId, symbol, side, fillQty, fil
         return;
     }
 
-    const currentQty = Number(pos?.quantity || 0);
-    const currentAvg = Number(pos?.avgPrice || 0);
-    const currentRealized = Number(pos?.realizedPnl || 0);
+    const currentQty = decimalOrZero(pos?.quantity);
+    const currentAvg = decimalOrZero(pos?.avgPrice);
+    const currentRealized = decimalOrZero(pos?.realizedPnl);
 
     if (sd === "BUY") {
-        const newQty = currentQty + qty;
-        const newAvg = newQty > 0 ? (currentAvg * currentQty + price * qty) / newQty : price;
+        const newQty = currentQty.plus(qty);
+        const newAvg = newQty.gt(0) ? currentAvg.times(currentQty).plus(price.times(qty)).div(newQty) : price;
         await prisma.position.upsert({
             where: { userId_symbol: { userId, symbol: sym } },
-            update: { quantity: newQty, avgPrice: newAvg },
-            create: { userId, symbol: sym, quantity: newQty, avgPrice: newAvg, realizedPnl: currentRealized },
+            update: { quantity: newQty.toFixed(), avgPrice: newAvg.toFixed() },
+            create: { userId, symbol: sym, quantity: newQty.toFixed(), avgPrice: newAvg.toFixed(), realizedPnl: currentRealized.toFixed() },
         });
         return;
     }
 
     if (sd === "SELL") {
-        const sold = Math.min(currentQty, qty);
-        const newQty = currentQty - sold;
-        const realizedDelta = (price - currentAvg) * sold;
-        const newRealized = currentRealized + realizedDelta;
+        const sold = currentQty.lt(qty) ? currentQty : qty;
+        const newQty = currentQty.minus(sold);
+        const realizedDelta = price.minus(currentAvg).times(sold);
+        const newRealized = currentRealized.plus(realizedDelta);
 
-        if (newQty <= 0) {
+        if (newQty.lte(0)) {
             await prisma.position.delete({
                 where: { userId_symbol: { userId, symbol: sym } },
             }).catch(() => { });
@@ -315,8 +325,8 @@ async function applyFillToPositions({ prisma, userId, symbol, side, fillQty, fil
 
         await prisma.position.upsert({
             where: { userId_symbol: { userId, symbol: sym } },
-            update: { quantity: newQty, realizedPnl: newRealized },
-            create: { userId, symbol: sym, quantity: newQty, avgPrice: currentAvg, realizedPnl: newRealized },
+            update: { quantity: newQty.toFixed(), realizedPnl: newRealized.toFixed() },
+            create: { userId, symbol: sym, quantity: newQty.toFixed(), avgPrice: currentAvg.toFixed(), realizedPnl: newRealized.toFixed() },
         });
     }
 }
@@ -411,12 +421,12 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
                 const bStatus = String(msg?.X || "").toUpperCase();
                 const mappedStatus = mapBinanceOrderStatusToLocal(bStatus);
 
-                const lastQty = Number(msg?.l);
-                const lastPrice = Number(msg?.L);
-
-                const cumQty = Number(msg?.z);
-                const cumQuote = Number(msg?.Z);
-                const avgPrice = Number.isFinite(cumQty) && cumQty > 0 && Number.isFinite(cumQuote) ? cumQuote / cumQty : null;
+                const lastQty = decimalString(msg?.l);
+                const lastPrice = decimalString(msg?.L);
+                const cumQty = decimalString(msg?.z);
+                const cumQuote = decimalString(msg?.Z);
+                const avgPrice = divideDecimalStrings(cumQuote, cumQty);
+                const originalQty = decimalString(msg?.q) ?? cumQty ?? "0";
 
                 const ts = new Date(Number(msg?.T) || Date.now());
 
@@ -427,8 +437,8 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
                                 orderId: internalOrderId,
                                 userId: uid, // Use local uid var
                                 status: mappedStatus,
-                                price: Number.isFinite(avgPrice) ? avgPrice : null,
-                                quantity: Number.isFinite(cumQty) ? cumQty : null,
+                                price: avgPrice,
+                                quantity: cumQty,
                                 timestamp: ts,
                             },
                         });
@@ -442,9 +452,9 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
                             update: {
                                 status: mappedStatus,
                                 binanceOrderId: msg?.i ? Number(msg.i) : undefined,
-                                executedQty: Number.isFinite(cumQty) ? cumQty : 0,
-                                cummulativeQuoteQty: Number.isFinite(cumQuote) ? cumQuote : 0,
-                                avgFillPrice: Number.isFinite(avgPrice) ? avgPrice : null,
+                                executedQty: cumQty ?? "0",
+                                cummulativeQuoteQty: cumQuote ?? "0",
+                                avgFillPrice: avgPrice,
                                 lastExchangeUpdateAt: ts,
                             },
                             create: {
@@ -453,12 +463,12 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
                                 symbol,
                                 side,
                                 type: orderType,
-                                quantity: Number.isFinite(cumQty) ? cumQty : 0,
+                                quantity: originalQty,
                                 status: mappedStatus,
                                 binanceOrderId: msg?.i ? Number(msg.i) : undefined,
-                                executedQty: Number.isFinite(cumQty) ? cumQty : 0,
-                                cummulativeQuoteQty: Number.isFinite(cumQuote) ? cumQuote : 0,
-                                avgFillPrice: Number.isFinite(avgPrice) ? avgPrice : null,
+                                executedQty: cumQty ?? "0",
+                                cummulativeQuoteQty: cumQuote ?? "0",
+                                avgFillPrice: avgPrice,
                                 lastExchangeUpdateAt: ts,
                             },
                         });
@@ -466,7 +476,7 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
                         console.warn("[execution] orderCommand upsert failed (user stream):", e?.message || e);
                     }
 
-                    if (Number.isFinite(lastQty) && lastQty > 0 && Number.isFinite(lastPrice) && lastPrice > 0) {
+                    if (isPositiveDecimal(lastQty) && isPositiveDecimal(lastPrice)) {
                         await applyFillToPositions({ prisma, userId: uid, symbol, side, fillQty: lastQty, fillPrice: lastPrice });
                     }
 
@@ -477,8 +487,8 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
                         symbol,
                         side,
                         orderType,
-                        quantity: Number.isFinite(cumQty) ? cumQty : null,
-                        price: Number.isFinite(avgPrice) ? avgPrice : null,
+                        quantity: cumQty,
+                        price: avgPrice,
                         reason: msg?.r ? String(msg.r) : null,
                         binance: {
                             status: bStatus,
@@ -540,10 +550,10 @@ function normalizeBalances(balances) {
     const out = [];
     for (const b of balances || []) {
         const asset = String(b.asset || b.a || "").toUpperCase();
-        const free = Number(b.free ?? b.f ?? 0);
-        const locked = Number(b.locked ?? b.l ?? 0);
+        const free = decimalString(b.free ?? b.f ?? 0) ?? "0";
+        const locked = decimalString(b.locked ?? b.l ?? 0) ?? "0";
         if (!asset) continue;
-        out.push({ asset, free, locked, total: free + locked });
+        out.push({ asset, free, locked, total: addDecimalStrings(free, locked) });
     }
     return out;
 }
@@ -706,7 +716,7 @@ async function main() {
         try {
             const account = await fetchBinanceAccount({ apiKey, secretKey });
             const all = normalizeBalances(account?.balances);
-            const nonZero = all.filter((b) => Number(b.total) > 0);
+            const nonZero = all.filter((b) => isPositiveDecimal(b.total));
             const pinned = pickPinnedBalances(all, pinnedAssets);
             const data = { updateTime: account?.updateTime ?? null, accountType: account?.accountType ?? null, pinned, nonZero };
             accountCacheSet(userId, data);

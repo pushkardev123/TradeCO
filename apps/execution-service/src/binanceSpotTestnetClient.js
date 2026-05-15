@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import https from "https";
 import querystring from "querystring";
+import { isPositiveDecimal } from "./tradingDecimal.js";
 
 export const BINANCE_SPOT_TESTNET_REST_BASE = "https://testnet.binance.vision";
 export const BINANCE_RESPONSE_METADATA = Symbol.for("tradeco.binance.responseMetadata");
@@ -326,7 +327,7 @@ export function buildOrderRequestParams({
     }
 
     if (mappedType === "LIMIT") {
-        if (price === undefined || price === null || Number(price) <= 0) {
+        if (!isPositiveDecimal(price)) {
             throw new Error("LIMIT requires a valid price");
         }
         params.price = price;
@@ -334,7 +335,7 @@ export function buildOrderRequestParams({
     }
 
     if (mappedType === "STOP_LOSS" || mappedType === "TAKE_PROFIT") {
-        if (stopPrice === undefined || stopPrice === null || Number(stopPrice) <= 0) {
+        if (!isPositiveDecimal(stopPrice)) {
             throw new Error(`${mappedType} requires a valid stopPrice`);
         }
         params.stopPrice = stopPrice;

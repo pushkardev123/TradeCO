@@ -68,7 +68,7 @@ try {
             symbol: orderDraft.symbol,
             side: orderDraft.side,
             type: orderDraft.orderType,
-            quantity: Number(orderDraft.quantity),
+            quantity: orderDraft.quantity,
             price: null,
             stopPrice: null,
             timeInForce: null,
@@ -144,7 +144,7 @@ try {
     assert.equal(prisma.events.length, 1, "expected successful execution to persist an order event");
     assert.equal(prisma.events[0].status, "FILLED");
     assert.equal(prisma.events[0].userId, authenticatedUserId);
-    assert.equal(prisma.events[0].price, 65000);
+    assert.equal(prisma.events[0].price, "65000");
 
     const published = pub.messages.find((message) => message.channel === eventsChannel);
     assert.ok(published, "expected a scoped order status event");

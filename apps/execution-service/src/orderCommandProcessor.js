@@ -1,4 +1,9 @@
 import { ORDER_COMMAND_TYPES } from "@tradeco/redis-stream-contracts";
+import {
+    decimalString,
+    divideDecimalStrings,
+    isPositiveDecimal,
+} from "./tradingDecimal.js";
 
 const SUBMITTED_STATUSES = new Set(["SUBMITTED", "PARTIALLY_FILLED", "FILLED"]);
 const TERMINAL_STATUSES = new Set(["FILLED", "CANCELED", "REJECTED", "EXPIRED"]);
@@ -126,9 +131,9 @@ async function processOrderSubmitCommand({
             symbol: normalized.symbol,
             side: normalized.side,
             type: normalized.orderType,
-            quantity: Number(normalized.quantity),
-            price: nullableNumber(normalized.price),
-            stopPrice: nullableNumber(normalized.stopPrice),
+            quantity: normalized.quantity,
+            price: nullableDecimalString(normalized.price),
+            stopPrice: nullableDecimalString(normalized.stopPrice),
             timeInForce: normalized.timeInForce || null,
             status: "PENDING",
         },
@@ -183,11 +188,11 @@ async function processOrderSubmitCommand({
 
     const transactTime = new Date(binanceRes.transactTime || Date.now());
     const status = normalizeOrderStatus(binanceRes.status);
-    const executedQty = nullableNumber(binanceRes.executedQty);
-    const cummulativeQuoteQty = nullableNumber(binanceRes.cummulativeQuoteQty);
+    const executedQty = nullableDecimalString(binanceRes.executedQty);
+    const cummulativeQuoteQty = nullableDecimalString(binanceRes.cummulativeQuoteQty);
     const avgFillPrice = deriveAverageFillPrice({ executedQty, cummulativeQuoteQty });
-    const lastTradeQty = nullableNumber(binanceRes.fills?.at?.(-1)?.qty);
-    const lastTradePrice = nullableNumber(binanceRes.fills?.at?.(-1)?.price);
+    const lastTradeQty = nullableDecimalString(binanceRes.fills?.at?.(-1)?.qty);
+    const lastTradePrice = nullableDecimalString(binanceRes.fills?.at?.(-1)?.price);
 
     await prisma.orderCommand.upsert({
         where: { orderId: normalized.orderId },
@@ -196,8 +201,8 @@ async function processOrderSubmitCommand({
             rawStatus: optionalString(binanceRes.status) || null,
             binanceOrderId: Number(binanceRes.orderId),
             submittedAt: transactTime,
-            executedQty: executedQty ?? 0,
-            cummulativeQuoteQty: cummulativeQuoteQty ?? 0,
+            executedQty: executedQty ?? "0",
+            cummulativeQuoteQty: cummulativeQuoteQty ?? "0",
             avgFillPrice,
             lastTradeQty,
             lastTradePrice,
@@ -209,16 +214,16 @@ async function processOrderSubmitCommand({
             symbol: normalized.symbol,
             side: normalized.side,
             type: normalized.orderType,
-            quantity: Number(normalized.quantity),
-            price: nullableNumber(normalized.price),
-            stopPrice: nullableNumber(normalized.stopPrice),
+            quantity: normalized.quantity,
+            price: nullableDecimalString(normalized.price),
+            stopPrice: nullableDecimalString(normalized.stopPrice),
             timeInForce: normalized.timeInForce || null,
             status,
             rawStatus: optionalString(binanceRes.status) || null,
             binanceOrderId: Number(binanceRes.orderId),
             submittedAt: transactTime,
-            executedQty: executedQty ?? 0,
-            cummulativeQuoteQty: cummulativeQuoteQty ?? 0,
+            executedQty: executedQty ?? "0",
+            cummulativeQuoteQty: cummulativeQuoteQty ?? "0",
             avgFillPrice,
             lastTradeQty,
             lastTradePrice,
@@ -226,7 +231,7 @@ async function processOrderSubmitCommand({
         },
     });
 
-    const eventQuantity = executedQty ?? Number(normalized.quantity);
+    const eventQuantity = executedQty ?? normalized.quantity;
     await prisma.orderEvent.create({
         data: {
             orderId: normalized.orderId,
@@ -477,7 +482,7 @@ export async function rejectOrder({ prisma, pub, eventsChannel, command, reason 
             userId: command.userId,
             status: "REJECTED",
             price: null,
-            quantity: Number(command.quantity),
+            quantity: nullableDecimalString(command.quantity) ?? "0",
             timestamp: now,
         },
     });
@@ -494,9 +499,9 @@ export async function rejectOrder({ prisma, pub, eventsChannel, command, reason 
             symbol: command.symbol,
             side: command.side,
             type: command.orderType,
-            quantity: Number(command.quantity),
-            price: nullableNumber(command.price),
-            stopPrice: nullableNumber(command.stopPrice),
+            quantity: nullableDecimalString(command.quantity) ?? "0",
+            price: nullableDecimalString(command.price),
+            stopPrice: nullableDecimalString(command.stopPrice),
             timeInForce: command.timeInForce || null,
             status: "REJECTED",
             errorMsg: reason,
@@ -592,9 +597,9 @@ async function rejectCancelAllLocalOrders({ prisma, pub, eventsChannel, orders, 
 async function persistCanceledOrder({ prisma, pub, eventsChannel, command, existing, binanceRes }) {
     const timestamp = new Date(binanceRes?.updateTime || binanceRes?.transactTime || Date.now());
     const status = normalizeOrderStatus(binanceRes?.status || "CANCELED");
-    const executedQty = nullableNumber(binanceRes?.executedQty) ?? nullableNumber(existing.executedQty);
-    const cummulativeQuoteQty = nullableNumber(binanceRes?.cummulativeQuoteQty) ?? nullableNumber(existing.cummulativeQuoteQty);
-    const avgFillPrice = deriveAverageFillPrice({ executedQty, cummulativeQuoteQty }) ?? existing.avgFillPrice ?? null;
+    const executedQty = nullableDecimalString(binanceRes?.executedQty) ?? nullableDecimalString(existing.executedQty);
+    const cummulativeQuoteQty = nullableDecimalString(binanceRes?.cummulativeQuoteQty) ?? nullableDecimalString(existing.cummulativeQuoteQty);
+    const avgFillPrice = deriveAverageFillPrice({ executedQty, cummulativeQuoteQty }) ?? nullableDecimalString(existing.avgFillPrice);
     const eventQuantity = executedQty ?? quantityFromExisting(existing, command);
     const binanceOrderId = nullableInteger(binanceRes?.orderId) ?? existing.binanceOrderId ?? null;
 
@@ -604,8 +609,8 @@ async function persistCanceledOrder({ prisma, pub, eventsChannel, command, exist
             status,
             rawStatus: optionalString(binanceRes?.status) || status,
             binanceOrderId,
-            executedQty: executedQty ?? existing.executedQty ?? 0,
-            cummulativeQuoteQty: cummulativeQuoteQty ?? existing.cummulativeQuoteQty ?? 0,
+            executedQty: executedQty ?? nullableDecimalString(existing.executedQty) ?? "0",
+            cummulativeQuoteQty: cummulativeQuoteQty ?? nullableDecimalString(existing.cummulativeQuoteQty) ?? "0",
             avgFillPrice,
             lastExchangeUpdateAt: timestamp,
             errorCode: null,
@@ -665,21 +670,19 @@ function commandFromExisting(existing, fallback) {
         symbol: existing.symbol || fallback.symbol,
         side: existing.side || fallback.side,
         orderType: existing.type || fallback.orderType,
-        quantity: String(existing.quantity ?? fallback.quantity),
+        quantity: nullableDecimalString(existing.quantity) ?? nullableDecimalString(fallback.quantity) ?? "0",
     };
 }
 
 function quantityFromExisting(existing, fallback) {
     if (!existing) {
-        const fallbackQty = Number(fallback?.quantity);
-        return Number.isFinite(fallbackQty) ? fallbackQty : 0;
+        return nullableDecimalString(fallback?.quantity) ?? "0";
     }
 
-    const executedQty = Number(existing.executedQty);
-    if (Number.isFinite(executedQty) && executedQty > 0) return executedQty;
+    const executedQty = nullableDecimalString(existing.executedQty);
+    if (isPositiveDecimal(executedQty)) return executedQty;
 
-    const originalQty = Number(existing.quantity ?? fallback.quantity);
-    return Number.isFinite(originalQty) ? originalQty : 0;
+    return nullableDecimalString(existing.quantity) ?? nullableDecimalString(fallback.quantity) ?? "0";
 }
 
 async function publishOrderStatusEvent({
@@ -703,8 +706,8 @@ async function publishOrderStatusEvent({
         symbol: command.symbol,
         side: command.side,
         orderType: command.orderType,
-        quantity,
-        price,
+        quantity: nullableDecimalString(quantity),
+        price: nullableDecimalString(price),
         binance: {
             orderId: binanceOrderId,
             clientOrderId,
@@ -714,9 +717,9 @@ async function publishOrderStatusEvent({
     }));
 }
 
-function nullableNumber(value) {
+function nullableDecimalString(value) {
     if (value === undefined || value === null || value === "") return null;
-    return Number(value);
+    return decimalString(value);
 }
 
 function nullableInteger(value) {
@@ -738,9 +741,7 @@ function normalizeOrderStatus(status) {
 }
 
 function deriveAverageFillPrice({ executedQty, cummulativeQuoteQty }) {
-    if (!Number.isFinite(executedQty) || executedQty <= 0) return null;
-    if (!Number.isFinite(cummulativeQuoteQty) || cummulativeQuoteQty <= 0) return null;
-    return cummulativeQuoteQty / executedQty;
+    return divideDecimalStrings(cummulativeQuoteQty, executedQty);
 }
 
 function requiredString(value, fieldName) {

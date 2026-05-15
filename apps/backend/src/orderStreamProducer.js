@@ -3,6 +3,10 @@ import {
     buildOrderCancelStreamEntry,
     buildOrderSubmitStreamEntry,
 } from "@tradeco/redis-stream-contracts";
+import {
+    decimalValuesEqual,
+    isPositiveDecimalString,
+} from "./tradingDecimal.js";
 
 const ORDER_TYPE_ALIASES = Object.freeze({
     STOP_MARKET: "STOP_LOSS",
@@ -184,9 +188,9 @@ export function isSameOrderIntent(existingCommand, orderDraft) {
         existingCommand.symbol === orderDraft.symbol &&
         existingCommand.side === orderDraft.side &&
         existingCommand.type === orderDraft.orderType &&
-        numberFieldMatches(existingCommand.quantity, orderDraft.quantity) &&
-        nullableNumberFieldMatches(existingCommand.price, orderDraft.price) &&
-        nullableNumberFieldMatches(existingCommand.stopPrice, orderDraft.stopPrice) &&
+        decimalFieldMatches(existingCommand.quantity, orderDraft.quantity) &&
+        nullableDecimalFieldMatches(existingCommand.price, orderDraft.price) &&
+        nullableDecimalFieldMatches(existingCommand.stopPrice, orderDraft.stopPrice) &&
         nullableStringFieldMatches(existingCommand.timeInForce, orderDraft.timeInForce)
     );
 }
@@ -259,24 +263,19 @@ function optionalDecimalStringFromInput(value) {
 
 function isPositiveNumericString(value) {
     if (typeof value !== "string" || value.trim() === "") return false;
-
-    const number = Number(value);
-    return Number.isFinite(number) && number > 0;
+    return isPositiveDecimalString(value);
 }
 
-function numberFieldMatches(existingValue, draftValue) {
-    const existingNumber = Number(existingValue);
-    const draftNumber = Number(draftValue);
-
-    return Number.isFinite(existingNumber) && Number.isFinite(draftNumber) && existingNumber === draftNumber;
+function decimalFieldMatches(existingValue, draftValue) {
+    return decimalValuesEqual(existingValue, draftValue);
 }
 
-function nullableNumberFieldMatches(existingValue, draftValue) {
+function nullableDecimalFieldMatches(existingValue, draftValue) {
     if (draftValue === undefined || draftValue === null || draftValue === "") {
         return existingValue === undefined || existingValue === null;
     }
 
-    return numberFieldMatches(existingValue, draftValue);
+    return decimalFieldMatches(existingValue, draftValue);
 }
 
 function nullableStringFieldMatches(existingValue, draftValue) {

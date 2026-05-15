@@ -163,12 +163,12 @@ test("persists and broadcasts filled market order status from Binance response",
     assert.equal(result.outcome, "submitted");
     assert.equal(prisma.commands.get("order_market_123").status, "FILLED");
     assert.equal(prisma.commands.get("order_market_123").rawStatus, "FILLED");
-    assert.equal(prisma.commands.get("order_market_123").executedQty, 0.001);
-    assert.equal(prisma.commands.get("order_market_123").avgFillPrice, 65000);
+    assert.equal(prisma.commands.get("order_market_123").executedQty, "0.001");
+    assert.equal(prisma.commands.get("order_market_123").avgFillPrice, "65000");
     assert.equal(prisma.events[0].status, "FILLED");
-    assert.equal(prisma.events[0].price, 65000);
+    assert.equal(prisma.events[0].price, "65000");
     assert.equal(pub.messages[0].message.status, "FILLED");
-    assert.equal(pub.messages[0].message.price, 65000);
+    assert.equal(pub.messages[0].message.price, "65000");
 });
 
 test("rejects command when credentials cannot be loaded", async () => {
@@ -234,7 +234,7 @@ test("skips already submitted commands before placing another Binance order", as
 
     assert.equal(result.outcome, "skipped");
     assert.equal(pub.messages[0].message.status, "SUBMITTED");
-    assert.equal(pub.messages[0].message.quantity, 0.001);
+    assert.equal(pub.messages[0].message.quantity, "0.001");
     assert.equal(pub.messages[0].message.binance.orderId, 98765);
 });
 

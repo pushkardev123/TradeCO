@@ -69,20 +69,20 @@ model OrderCommand {
 
   // ---- Order intent (from frontend submit) ----
   
-  quantity           Float
-  price              Float?                 // LIMIT / STOP_LOSS_LIMIT
-  stopPrice          Float?                 // STOP_LOSS / TAKE_PROFIT
+  quantity           Decimal @db.Decimal(36, 18)
+  price              Decimal? @db.Decimal(36, 18) // LIMIT / STOP_LOSS_LIMIT
+  stopPrice          Decimal? @db.Decimal(36, 18) // STOP_LOSS / TAKE_PROFIT
   timeInForce        String?                // GTC / IOC / FOK
 
   // ---- Execution state (updated via websocket) ----
   status             String                 // RECEIVED | PENDING | PARTIALLY_FILLED | FILLED | REJECTED
   rawStatus          String?                // Binance X: NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED
 
-  executedQty        Float   @default(0)    // Binance z (cumulative filled qty)
-  cummulativeQuoteQty Float? @default(0)    // Binance Z
-  avgFillPrice       Float?                 // derived: Z / z
-  lastTradeQty       Float?                 // Binance l
-  lastTradePrice     Float?                 // Binance L
+  executedQty        Decimal @default(0) @db.Decimal(36, 18) // Binance z (cumulative filled qty)
+  cummulativeQuoteQty Decimal? @default(0) @db.Decimal(36, 18) // Binance Z
+  avgFillPrice       Decimal? @db.Decimal(36, 18) // derived: Z / z
+  lastTradeQty       Decimal? @db.Decimal(36, 18) // Binance l
+  lastTradePrice     Decimal? @db.Decimal(36, 18) // Binance L
 
   // ---- Error / rejection info ----
   errorCode          String?
@@ -103,8 +103,8 @@ model OrderEvent {
   orderId   String
   userId    String
   status    String
-  price     Float?
-  quantity  Float?
+  price     Decimal? @db.Decimal(36, 18)
+  quantity  Decimal? @db.Decimal(36, 18)
   timestamp DateTime
   createdAt DateTime @default(now())
 
@@ -116,9 +116,9 @@ model Position {
   id          String   @id @default(cuid())
   userId      String
   symbol      String
-  quantity    Float
-  avgPrice    Float
-  realizedPnl Float    @default(0)
+  quantity    Decimal  @db.Decimal(36, 18)
+  avgPrice    Decimal  @db.Decimal(36, 18)
+  realizedPnl Decimal  @default(0) @db.Decimal(36, 18)
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 
