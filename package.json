@@ -15,6 +15,7 @@
         "dev:frontend": "npm --workspace apps/frontend run dev",
         "dev:backend": "npm --workspace apps/backend run dev",
         "dev:execution": "npm --workspace apps/execution-service run dev",
-        "dev:event": "npm --workspace apps/event-service run dev"
+        "dev:event": "npm --workspace apps/event-service run dev",
+        "smoke:p0-auth-boundary": "node scripts/p0-auth-boundary-smoke.mjs"
     }
 }

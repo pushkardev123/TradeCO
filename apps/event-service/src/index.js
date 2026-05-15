@@ -141,6 +141,32 @@ function sendJson(res, status, body) {
     return res.end(JSON.stringify(body));
 }
 
+function hasUserIdParam(url) {
+    return url.searchParams.has("userId") || url.searchParams.has("user_id");
+}
+
+function getUserIdParam(url) {
+    if (!hasUserIdParam(url)) return null;
+    return url.searchParams.get("userId") ?? url.searchParams.get("user_id") ?? "";
+}
+
+function rejectUserIdParam(url, user, res) {
+    const supplied = getUserIdParam(url);
+    if (supplied === null) return false;
+
+    const suppliedUserId = String(supplied || "");
+    if (suppliedUserId && suppliedUserId !== user?.id) {
+        sendJson(res, 403, { ok: false, error: "userId does not match the authenticated user" });
+        return true;
+    }
+
+    sendJson(res, 403, {
+        ok: false,
+        error: "userId is derived from the access token and is not accepted in requests",
+    });
+    return true;
+}
+
 function getBearerToken(req) {
     const header = String(req.headers.authorization || "");
     const [type, token] = header.split(" ");
@@ -245,13 +271,15 @@ const server = http.createServer(async (req, res) => {
         return;
     }
     // Frontend -> event-service: fetch account balances (pinned + nonZero).
-    // User scope comes from the verified access token; userId query params are ignored.
+    // User scope comes from the verified access token; client userId is not accepted.
     if (req.url?.startsWith("/account-info") && req.method === "GET") {
         const user = requireHttpUser(req, res);
         if (!user) return;
 
         try {
             const u = new URL(req.url, `http://localhost:${PORT}`);
+            if (rejectUserIdParam(u, user, res)) return;
+
             const pinnedParam = String(u.searchParams.get("pinned") || "");
             const pinnedAssets = pinnedParam
                 ? pinnedParam.split(",").map((s) => s.trim()).filter(Boolean)
@@ -385,6 +413,22 @@ server.on("upgrade", (req, socket, head) => {
             socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
             return socket.destroy();
         }
+    }
+
+    if (hasUserIdParam(u)) {
+        if (!user) {
+            socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+            return socket.destroy();
+        }
+
+        const suppliedUserId = String(getUserIdParam(u) || "");
+        if (suppliedUserId && suppliedUserId !== user.id) {
+            socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+            return socket.destroy();
+        }
+
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        return socket.destroy();
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {

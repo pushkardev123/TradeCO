@@ -10,6 +10,8 @@ const REDIS_URL = config.redisUrl;
 const COMMANDS_CHANNEL = config.commandsChannel;
 const EVENTS_CHANNEL = config.eventsChannel;
 const PRICES_CHANNEL = config.pricesChannel;
+// Canonical account/balance fanout channel. Payload:
+// { type: "ACCOUNT_BALANCES", userId, ts, balances: [{ asset, free, locked }] }
 const BALANCES_CHANNEL = config.balancesChannel;
 
 // Chart (candlestick / kline) streaming (event-service -> execution-service)
