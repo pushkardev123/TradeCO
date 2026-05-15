@@ -9,6 +9,15 @@ Use the local setup guide for the Postgres/Redis Docker Compose stack, service `
 
 [docs/local-setup.md](docs/local-setup.md)
 
+For a full app stack with frontend, backend, event service, execution service, Postgres, and Redis:
+
+```sh
+cp .env.deploy.example .env.deploy
+npm run deploy:compose:up
+```
+
+See [docs/deployment.md](docs/deployment.md) for Docker Compose, nginx reverse proxy, and PM2 deployment guidance.
+
 TradeCO is a production-inspired trading platform built to demonstrate advanced system design, backend architecture, real-time event processing, and frontend engineering.
 
 Instead of a CRUD-style application, TradeCO models how modern trading systems are actually structured: decoupled services, asynchronous workflows, streaming data, and failure-isolated components.
@@ -190,11 +199,10 @@ Redis Streams contract:
 ⸻
 
 Deployment & Infrastructure
-	•	Frontend: Vercel (Production)
-	•	Backend API & Services: Ubuntu VPS with PM2
-	•	Database: Managed Cloud PostgreSQL
-	•	Event Bus: Managed Redis Cloud
-	•	External Exchange: Binance API
+	•	One-command Docker Compose stack is available in `docker-compose.deploy.yml`
+	•	Nginx reverse proxy sample lives in `deploy/nginx/tradeco.conf`
+	•	PM2 process config for non-Docker deployments lives in `ecosystem.config.cjs`
+	•	External Exchange: Binance Spot Testnet API
 
 ⸻
 

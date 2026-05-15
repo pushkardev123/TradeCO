@@ -1,0 +1,12 @@
+.git
+.DS_Store
+node_modules
+**/node_modules
+apps/frontend/.next
+**/.env
+.env
+.env.deploy
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage

@@ -1,0 +1,163 @@
+name: tradeco
+
+x-app-build: &app-build
+  context: .
+  dockerfile: Dockerfile
+
+x-service-env: &service-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql://${TRADECO_POSTGRES_USER:-tradeco}:${TRADECO_POSTGRES_PASSWORD:-tradeco_change_me}@postgres:5432/${TRADECO_POSTGRES_DB:-tradeco}?schema=public}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.deploy}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env.deploy}
+  COMMANDS_CHANNEL: ${COMMANDS_CHANNEL:-commands:order:submit}
+  ORDER_COMMAND_STREAM: ${ORDER_COMMAND_STREAM:-tradeco:orders:commands:v1}
+  ORDER_COMMAND_DLQ_STREAM: ${ORDER_COMMAND_DLQ_STREAM:-tradeco:orders:commands:dlq:v1}
+  ORDER_EVENT_STREAM: ${ORDER_EVENT_STREAM:-tradeco:orders:events:v1}
+  EVENTS_CHANNEL: ${EVENTS_CHANNEL:-events:order:status}
+  PRICES_CHANNEL: ${PRICES_CHANNEL:-events:price:update}
+  BALANCES_CHANNEL: ${BALANCES_CHANNEL:-events:account:balances}
+  CHART_REQ_CHANNEL: ${CHART_REQ_CHANNEL:-events:chart:request}
+  CHARTS_CHANNEL: ${CHARTS_CHANNEL:-events:chart:update}
+  ACCOUNT_REQ_CHANNEL: ${ACCOUNT_REQ_CHANNEL:-events:account:request}
+  ACCOUNT_RES_CHANNEL: ${ACCOUNT_RES_CHANNEL:-events:account:response}
+  SYMBOL_REQ_CHANNEL: ${SYMBOL_REQ_CHANNEL:-events:symbol:request}
+  SYMBOL_RES_CHANNEL: ${SYMBOL_RES_CHANNEL:-events:symbol:response}
+  ACCOUNT_CACHE_MS: ${ACCOUNT_CACHE_MS:-5000}
+  SYMBOL_CACHE_MS: ${SYMBOL_CACHE_MS:-600000}
+  BINANCE_API_BASE: ${BINANCE_API_BASE:-https://testnet.binance.vision}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${TRADECO_POSTGRES_DB:-tradeco}
+      POSTGRES_USER: ${TRADECO_POSTGRES_USER:-tradeco}
+      POSTGRES_PASSWORD: ${TRADECO_POSTGRES_PASSWORD:-tradeco_change_me}
+    ports:
+      - "${TRADECO_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - tradeco-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${TRADECO_REDIS_PORT:-6379}:6379"
+    volumes:
+      - tradeco-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      <<: *app-build
+      target: backend
+    restart: "no"
+    environment:
+      <<: *service-env
+    command: ["npx", "prisma", "migrate", "deploy", "--schema", "apps/backend/prisma/schema.prisma"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build:
+      <<: *app-build
+      target: backend
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      PORT: 8080
+      CORS_ORIGIN: ${PUBLIC_APP_ORIGIN:-http://localhost:3000}
+      JWT_ACCESS_TTL_SECONDS: ${JWT_ACCESS_TTL_SECONDS:-900}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-tradeco_refresh}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-lax}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  event-service:
+    build:
+      <<: *app-build
+      target: event-service
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      PORT: 8081
+      CORS_ORIGIN: ${PUBLIC_APP_ORIGIN:-http://localhost:3000}
+    ports:
+      - "${EVENT_SERVICE_PORT:-8081}:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+
+  execution-service:
+    build:
+      <<: *app-build
+      target: execution-service
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      BINANCE_WS_BASE: ${BINANCE_WS_BASE:-wss://stream.testnet.binance.vision}
+      LEGACY_COMMANDS_CHANNEL_ENABLED: ${LEGACY_COMMANDS_CHANNEL_ENABLED:-false}
+      ORDER_COMMAND_CONSUMER_GROUP: ${ORDER_COMMAND_CONSUMER_GROUP:-tradeco:execution:orders:v1}
+      ORDER_COMMAND_READ_COUNT: ${ORDER_COMMAND_READ_COUNT:-10}
+      ORDER_COMMAND_CLAIM_IDLE_MS: ${ORDER_COMMAND_CLAIM_IDLE_MS:-30000}
+      ORDER_COMMAND_MAX_ATTEMPTS: ${ORDER_COMMAND_MAX_ATTEMPTS:-5}
+      DEFAULT_KLINE_INTERVAL: ${DEFAULT_KLINE_INTERVAL:-1m}
+      MARKET_MODE: ${MARKET_MODE:-all}
+      SYMBOLS: ${SYMBOLS:-btcusdt}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      <<: *app-build
+      target: frontend
+      args:
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://localhost:8080}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+        NEXT_PUBLIC_EVENT_SERVICE_URL: ${NEXT_PUBLIC_EVENT_SERVICE_URL:-http://localhost:8081}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8081/prices}
+        NEXT_PUBLIC_MARKET_FLUSH_MS: ${NEXT_PUBLIC_MARKET_FLUSH_MS:-1500}
+        NEXT_PUBLIC_MAX_SYMBOLS: ${NEXT_PUBLIC_MAX_SYMBOLS:-1000}
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_started
+      event-service:
+        condition: service_started
+
+volumes:
+  tradeco-postgres-data:
+  tradeco-redis-data:

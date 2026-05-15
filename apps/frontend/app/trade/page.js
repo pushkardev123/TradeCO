@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Inter } from "next/font/google";
 import { z } from "zod";
 import {
     createChart,
@@ -20,11 +19,6 @@ const PRICE_CHANNEL = "events:price:update";
 const ORDER_STATUS_CHANNEL = "events:order:status";
 const ACCOUNT_BALANCES_CHANNEL = "events:account:balances";
 const CHARTS_CHANNEL = "events:chart:update";
-
-const inter = Inter({
-    subsets: ["latin"],
-    weight: ["400", "500", "600", "700"],
-});
 
 export default function TradePage() {
     const router = useRouter();
@@ -1174,14 +1168,14 @@ export default function TradePage() {
 
     if (!authReady) {
         return (
-            <main className={`${inter.className} min-h-screen w-full flex items-center justify-center bg-[#09090b] text-neutral-200`}>
+            <main className="min-h-screen w-full flex items-center justify-center bg-[#09090b] text-neutral-200">
                 <div className="text-sm text-neutral-400">Checking session...</div>
             </main>
         );
     }
 
     return (
-        <main className={`${inter.className} min-h-screen w-full overflow-x-hidden transition-colors duration-200 ${isDark ? "bg-[#09090b] text-neutral-200" : "bg-[#f5f5f5] text-neutral-900"}`}>
+        <main className={`min-h-screen w-full overflow-x-hidden transition-colors duration-200 ${isDark ? "bg-[#09090b] text-neutral-200" : "bg-[#f5f5f5] text-neutral-900"}`}>
             {/* Topbar - Glassmorphism style */}
             <div className={`sticky top-0 z-40 border-b backdrop-blur-md ${isDark ? "bg-[#09090b]/80 border-white/10" : "bg-white/80 border-black/5"}`}>
                 <div className="max-w-[1920px] mx-auto px-4 h-16 flex items-center justify-between">
