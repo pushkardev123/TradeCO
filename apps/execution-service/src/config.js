@@ -7,6 +7,7 @@ import {
 const SERVICE = "execution";
 const DEFAULT_BINANCE_API_BASE = "https://testnet.binance.vision";
 const DEFAULT_BINANCE_WS_BASE = "wss://stream.testnet.binance.vision";
+const DEFAULT_BINANCE_WS_API_BASE = "wss://ws-api.testnet.binance.vision/ws-api/v3";
 
 function readEnv(name, fallback = undefined) {
     const value = process.env[name];
@@ -79,6 +80,19 @@ function validateBinanceWsUrl(name, value, errors) {
     return parsed.origin;
 }
 
+function validateBinanceWsApiUrl(name, value, errors) {
+    const parsed = validateUrl(name, value, ["wss:"], errors);
+    if (!parsed) return "";
+    if (parsed.hostname.toLowerCase() !== "ws-api.testnet.binance.vision") {
+        errors.push(`${name} must point to Binance Spot Testnet WebSocket API`);
+    }
+    const pathname = parsed.pathname.replace(/\/$/, "");
+    if (pathname !== "/ws-api/v3") {
+        errors.push(`${name} path must be /ws-api/v3`);
+    }
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+}
+
 function parseSymbols(value, errors) {
     const symbols = String(value || "btcusdt")
         .split(",")
@@ -146,6 +160,11 @@ const binanceWsBase = validateBinanceWsUrl(
     readEnv("BINANCE_WS_BASE", DEFAULT_BINANCE_WS_BASE),
     errors
 );
+const binanceWsApiBase = validateBinanceWsApiUrl(
+    "BINANCE_WS_API_BASE",
+    readEnv("BINANCE_WS_API_BASE", DEFAULT_BINANCE_WS_API_BASE),
+    errors
+);
 const accountCacheMs = parseInteger("ACCOUNT_CACHE_MS", 5000, errors, { min: 0 });
 const symbolCacheMs = parseInteger("SYMBOL_CACHE_MS", 600000, errors, { min: 0 });
 const reconciliationIntervalMs = parseInteger("RECONCILIATION_INTERVAL_MS", 60000, errors, { min: 0 });
@@ -204,6 +223,7 @@ export const config = Object.freeze({
     symbolCacheMs,
     binanceApiBase,
     binanceWsBase,
+    binanceWsApiBase,
     marketMode,
     symbols,
 });
@@ -226,6 +246,7 @@ export function logStartupConfig() {
         balancesChannel: config.balancesChannel,
         binanceApiBase: redactUrl(config.binanceApiBase),
         binanceWsBase: redactUrl(config.binanceWsBase),
+        binanceWsApiBase: redactUrl(config.binanceWsApiBase),
         marketMode: config.marketMode,
         symbols: config.symbols,
         accountCacheMs: config.accountCacheMs,

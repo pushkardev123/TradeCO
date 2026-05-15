@@ -77,7 +77,7 @@ The backend is the authoritative command gateway. The event service must not acc
 
 - Owns Redis Stream consumption, Binance Spot Testnet API calls, order state reconciliation, and market/user stream ingestion.
 - Must use Binance Spot Testnet endpoints.
-- Should migrate away from deprecated listen-key user data stream flows and use the current Binance WebSocket API/user data stream approach documented by Binance.
+- Uses the current Binance WebSocket API user data stream subscription flow; do not regress to deprecated REST stream-key management.
 - Must be idempotent around command processing, retries, and duplicate delivery.
 
 ## Local Setup
@@ -191,5 +191,5 @@ Address these early in the execution plan:
 - Public routes that trust client-supplied `userId`.
 - Token/user identity persisted in frontend `localStorage`.
 - Event service acting as an unauthenticated order ingress.
-- Deprecated Binance listen-key stream usage.
+- Cleared baseline: deprecated Binance user stream key handling was migrated to the current WebSocket API subscription flow. Keep this regression from coming back.
 - Float-based handling of prices, quantities, balances, or notional values.

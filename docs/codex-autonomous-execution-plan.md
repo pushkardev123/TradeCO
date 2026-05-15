@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 03:19 IST
+Last updated: 2026-05-16 03:29 IST
 
 ## Purpose
 
@@ -181,3 +181,36 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
   - `npm run smoke:p0-auth-boundary`: pass.
   - `git diff --check`: pass.
+
+### Active: Migrate user data stream to current WebSocket API flow
+
+- Notion page: `3608ea2b-3f8a-81a5-a44a-e440eb7ac721`
+- Status at start: `Not started`, `P0`, high risk.
+- Branch: `main`
+- Started: 2026-05-16 03:20 IST
+- Goal: remove deprecated REST stream-key management and subscribe to Binance Spot Testnet user data events through the current WebSocket API flow.
+- Binance docs checked:
+  - WebSocket API base for Spot Testnet: `wss://ws-api.testnet.binance.vision/ws-api/v3`.
+  - User data stream subscription method: `userDataStream.subscribe.signature`.
+- Implementation:
+  - Added WebSocket API user data stream helper for Testnet URL validation, signed subscribe/unsubscribe request building, HMAC/asymmetric signing support, subscription acknowledgement parsing, and wrapped event extraction.
+  - Updated execution-service user stream startup to connect to `BINANCE_WS_API_BASE`, send a signed subscription request, process wrapped account/order events, and reconnect after unexpected closes.
+  - Removed REST stream-key create/keepalive/close client methods and all execution-service usage of that old flow.
+  - Added `BINANCE_WS_API_BASE` to execution-service config, Docker Compose deploy env, and env/docs examples.
+  - Updated task guidance/docs so future agents do not reintroduce the old stream-key path.
+- Verification:
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `node --check apps/execution-service/src/index.js`: pass.
+  - `node --check apps/execution-service/src/binanceUserDataStream.js`: pass.
+  - No legacy stream-key identifiers or REST user-data-stream path remains in code/docs: pass.
+  - `npm run test:stream-contracts`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml config --quiet`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build`: pass.
+  - Execution-service Docker logs show `binanceWsApiBase` set to Spot Testnet WebSocket API and market stream connected.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `npm run smoke:p0-auth-boundary`: pass.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
+  - `git diff --check`: pass.
+- Verification limitation:
+  - Live Binance user data subscription was not opened during automated QA because no seeded encrypted user Testnet credential was exercised in the smoke harness. The signed request builder, event envelope parser, reconnect path, Docker startup, and order/account event handlers are covered deterministically.

@@ -99,38 +99,6 @@ export class BinanceSpotTestnetClient {
         return this.signedRequest({ ...options, method: "DELETE" });
     }
 
-    async createListenKey({ apiKey } = {}) {
-        const { data } = await this.request({
-            method: "POST",
-            path: "/api/v3/userDataStream",
-            apiKey: requiredString(apiKey, "apiKey"),
-        });
-
-        if (!data?.listenKey) {
-            throw new Error("Failed to create listenKey");
-        }
-
-        return data.listenKey;
-    }
-
-    async keepAliveListenKey({ apiKey, listenKey } = {}) {
-        await this.request({
-            method: "PUT",
-            path: "/api/v3/userDataStream",
-            apiKey: requiredString(apiKey, "apiKey"),
-            bodyParams: { listenKey: requiredString(listenKey, "listenKey") },
-        });
-    }
-
-    async closeListenKey({ apiKey, listenKey } = {}) {
-        await this.request({
-            method: "DELETE",
-            path: "/api/v3/userDataStream",
-            apiKey: requiredString(apiKey, "apiKey"),
-            bodyParams: { listenKey: requiredString(listenKey, "listenKey") },
-        });
-    }
-
     async fetchKlineSnapshot({ symbol, interval, limit = 50 } = {}) {
         const sym = normalizeSymbol(symbol);
         const iv = normalizeInterval(interval);

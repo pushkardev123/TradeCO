@@ -62,14 +62,14 @@ This repo is testnet-only. Do not use production Binance endpoints while handlin
 ## Risks
 
 - Binance Spot Testnet can reset balances and orders independently of local persisted state.
-- Current code still uses listen-key user streams in execution service; reset behavior can invalidate active streams.
+- Reset behavior can invalidate active Binance WebSocket API user data stream subscriptions; execution service should reconnect and re-subscribe after restart.
 - Restarting execution service interrupts active market, account, and user streams.
-- Local positions currently use JavaScript numbers and Prisma `Float`; reconciliation after a reset may be imprecise until decimal-safe storage is implemented.
+- Decimal-safe storage is in place for local trading values; reset/reconciliation checks should still verify decimal strings remain normalized after backfill.
 
 ## Pending Implementation-Dependent Work
 
 - Define a database reset or archival script for orders, events, positions, and future credential records.
 - Add a reconciliation command that compares local state with Binance Spot Testnet state without exposing secrets.
-- Replace listen-key user stream handling with the current Binance WebSocket API/user data stream approach scoped in the tracker.
+- Keep user data stream subscriptions on the Binance WebSocket API flow and verify execution-service reconnect behavior after credential resets.
 - Add exact production or VPS process-manager restart commands after deployment tooling is documented.
 - Link this runbook from the Notion project dashboard after broader runbook scope is approved.

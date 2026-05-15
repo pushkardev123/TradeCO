@@ -54,7 +54,7 @@ Important:
 - Use the same `JWT_SECRET` in backend and event-service.
 - Use the same 32-character `ENCRYPTION_KEY` in backend and execution-service.
 - Do not put real Binance keys in service env files. Users provide Binance Spot Testnet keys during signup/onboarding.
-- Keep `BINANCE_API_BASE` and `BINANCE_WS_BASE` on the Binance Spot Testnet hosts shown in the examples.
+- Keep `BINANCE_API_BASE`, `BINANCE_WS_BASE`, and `BINANCE_WS_API_BASE` on the Binance Spot Testnet hosts shown in the examples.
 - Keep the backend and execution `ORDER_COMMAND_STREAM` defaults unless you intentionally need an isolated local stream. The backend still publishes `COMMANDS_CHANNEL` during the transition, but execution should keep `LEGACY_COMMANDS_CHANNEL_ENABLED=false` unless you are explicitly testing rollback.
 
 ## 4. Prepare Prisma

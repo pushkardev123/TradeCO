@@ -158,6 +158,7 @@ async function processOrderSubmitCommand({
         pub,
         userId: normalized.userId,
         apiKey: credential.apiKey,
+        secretKey: credential.secretKey,
     });
 
     let binanceRes;
@@ -331,6 +332,7 @@ export async function processOrderCancelCommand({
         pub,
         userId: normalized.userId,
         apiKey: credential.apiKey,
+        secretKey: credential.secretKey,
     });
 
     let binanceRes;
@@ -412,6 +414,7 @@ export async function processOrderCancelAllCommand({
         pub,
         userId: normalized.userId,
         apiKey: credential.apiKey,
+        secretKey: credential.secretKey,
     });
 
     let binanceResults;

@@ -5,6 +5,13 @@ import crypto from "crypto";
 import { config, logStartupConfig, safeErrorMessage } from "./config.js";
 import { createBinanceSpotTestnetClient } from "./binanceSpotTestnetClient.js";
 import {
+    buildUserDataStreamSubscribeRequest,
+    buildUserDataStreamUnsubscribeRequest,
+    getUserDataStreamSubscriptionId,
+    isUserDataStreamSubscribeAck,
+    parseUserDataStreamMessage,
+} from "./binanceUserDataStream.js";
+import {
     parseLegacyOrderCommandMessage,
     processOrderCommand,
 } from "./orderCommandProcessor.js";
@@ -102,10 +109,11 @@ async function loadActiveExchangeCredential(prisma, userId) {
 
 const BINANCE_API_BASE = config.binanceApiBase;
 const BINANCE_WS_BASE = config.binanceWsBase;
+const BINANCE_WS_API_BASE = config.binanceWsApiBase;
 const binanceClient = createBinanceSpotTestnetClient({ baseUrl: BINANCE_API_BASE });
 
 // Per-user userDataStream registry
-const userStreams = new Map(); // userId -> { listenKey, ws, keepAliveTimer, placeholder: boolean }
+const userStreams = new Map(); // userId -> { ws, subscriptionId, placeholder: boolean }
 
 // Kline stream registry: key = `${symbol}|${interval}` -> { ws, lastKline, refCount, createdAt }
 const klineStreams = new Map();
@@ -256,18 +264,6 @@ function accountCacheSet(userId, data) {
     accountCache.set(userId, { ts: Date.now(), data });
 }
 
-async function createListenKey(apiKey) {
-    return binanceClient.createListenKey({ apiKey });
-}
-
-async function keepAliveListenKey(apiKey, listenKey) {
-    await binanceClient.keepAliveListenKey({ apiKey, listenKey });
-}
-
-async function closeListenKey(apiKey, listenKey) {
-    await binanceClient.closeListenKey({ apiKey, listenKey });
-}
-
 function mapBinanceOrderStatusToLocal(X) {
     const s = String(X || "").toUpperCase();
     if (s === "FILLED") return "FILLED";
@@ -336,60 +332,51 @@ async function applyFillToPositions({ prisma, userId, symbol, side, fillQty, fil
     }
 }
 
-/**
- * FIXED: 
- * 1. Force userId to string to prevent Map key mismatches (Number vs String).
- * 2. Set 'placeholder' in Map synchronously to prevent race conditions from rapid requests.
- */
-function startUserDataStream({ prisma, pub, userId, apiKey }) {
-    const uid = String(userId); // Ensure standard key format
+function startUserDataStream({ prisma, pub, userId, apiKey, secretKey }) {
+    const uid = String(userId);
 
-    // Check if exists OR is currently initializing
     if (userStreams.has(uid)) return;
 
-    // Reserve spot immediately to block duplicate async calls
     userStreams.set(uid, { placeholder: true });
 
     (async () => {
-        let listenKey;
-        try {
-            listenKey = await createListenKey(apiKey);
-        } catch (e) {
-            console.error("[execution] Failed to create listenKey for user:", uid, e?.message || e);
-            userStreams.delete(uid); // Clean up placeholder on failure
-            return;
-        }
+        console.log("[execution] user data stream connecting:", { userId: uid, wsUrl: BINANCE_WS_API_BASE });
 
-        const wsUrl = `${BINANCE_WS_BASE}/ws/${listenKey}`;
-        console.log("[execution] user data stream connecting:", { userId: uid, wsUrl });
+        const ws = new WebSocket(BINANCE_WS_API_BASE);
+        const entry = {
+            ws,
+            subscriptionId: null,
+            subscribeRequestId: null,
+            shouldReconnect: true,
+            placeholder: false,
+        };
 
-        const ws = new WebSocket(wsUrl);
-
-        const keepAliveTimer = setInterval(async () => {
-            try {
-                await keepAliveListenKey(apiKey, listenKey);
-            } catch (e) {
-                console.warn("[execution] listenKey keepAlive failed:", e?.message || e);
-            }
-        }, 30 * 60 * 1000); // every 30 mins
-
-        // Replace placeholder with real connection data
-        userStreams.set(uid, { listenKey, ws, keepAliveTimer, placeholder: false });
+        userStreams.set(uid, entry);
 
         ws.on("open", () => {
-            console.log("[execution] user data stream connected", { userId: uid });
+            try {
+                const request = buildUserDataStreamSubscribeRequest({ apiKey, secretKey });
+                entry.subscribeRequestId = request.id;
+                ws.send(JSON.stringify(request));
+                console.log("[execution] user data stream subscription requested", { userId: uid });
+            } catch (e) {
+                entry.shouldReconnect = false;
+                console.error("[execution] user data stream subscription request failed", { userId: uid, err: e?.message || e });
+                try { ws.close(); } catch { }
+            }
         });
 
-        ws.on("close", async (code, reason) => {
+        ws.on("close", (code, reason) => {
             console.warn("[execution] user data stream closed", { userId: uid, code, reason: String(reason || "") });
-            const entry = userStreams.get(uid);
-            if (entry) {
-                if (entry.keepAliveTimer) clearInterval(entry.keepAliveTimer);
+            const current = userStreams.get(uid);
+            if (current === entry) {
                 userStreams.delete(uid);
+                if (entry.shouldReconnect) {
+                    setTimeout(() => {
+                        startUserDataStream({ prisma, pub, userId: uid, apiKey, secretKey });
+                    }, 1500);
+                }
             }
-            try {
-                await closeListenKey(apiKey, listenKey);
-            } catch { }
         });
 
         ws.on("error", (err) => {
@@ -397,12 +384,32 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
         });
 
         ws.on("message", async (raw) => {
-            let msg;
-            try {
-                msg = JSON.parse(raw.toString());
-            } catch {
+            const parsed = parseUserDataStreamMessage(raw);
+            if (parsed.kind === "invalid") {
                 return;
             }
+
+            if (parsed.kind === "response") {
+                if (isUserDataStreamSubscribeAck(parsed, entry.subscribeRequestId)) {
+                    entry.subscriptionId = getUserDataStreamSubscriptionId(parsed);
+                    console.log("[execution] user data stream subscribed", { userId: uid, subscriptionId: entry.subscriptionId });
+                    return;
+                }
+
+                if (parsed.raw?.id === entry.subscribeRequestId && Number(parsed.raw?.status) >= 400) {
+                    entry.shouldReconnect = false;
+                    console.warn("[execution] user data stream subscription rejected", {
+                        userId: uid,
+                        status: parsed.raw?.status,
+                        error: parsed.raw?.error?.msg || parsed.raw?.error?.message || "subscription failed",
+                    });
+                    try { ws.close(); } catch { }
+                }
+                return;
+            }
+
+            const msg = parsed.event;
+            if (!msg) return;
 
             // 1) Balance updates
             if (msg?.e === "outboundAccountPosition" && Array.isArray(msg?.B)) {
@@ -509,6 +516,21 @@ function startUserDataStream({ prisma, pub, userId, apiKey }) {
             }
         });
     })();
+}
+
+function stopUserDataStream(uid, entry) {
+    if (!entry) return;
+    entry.shouldReconnect = false;
+
+    if (entry.ws?.readyState === WebSocket.OPEN && entry.subscriptionId !== null) {
+        try {
+            entry.ws.send(JSON.stringify(buildUserDataStreamUnsubscribeRequest({ subscriptionId: entry.subscriptionId })));
+        } catch { }
+    }
+
+    try {
+        entry.ws?.close();
+    } catch { }
 }
 
 // In-memory cache: SYMBOL -> { data, ts }
@@ -705,9 +727,9 @@ async function main() {
             await pub.publish(replyTo, JSON.stringify({ ...baseResp, ok: true, fromCache: true, data: cached }));
             // Try to start stream even on cache hit, to handle server restarts or reconnections
             try {
-                const { apiKey } = await loadActiveExchangeCredential(prisma, userId);
-                // Force startUserDataStream call, which now safely handles duplicates via Map check
-                startUserDataStream({ prisma, pub, userId, apiKey });
+                const { apiKey, secretKey } = await loadActiveExchangeCredential(prisma, userId);
+                // Force startUserDataStream call, which safely handles duplicates via Map check.
+                startUserDataStream({ prisma, pub, userId, apiKey, secretKey });
             } catch { }
             return;
         }
@@ -724,7 +746,7 @@ async function main() {
         }
 
         // IMPORTANT: Start stream immediately on first data request
-        startUserDataStream({ prisma, pub, userId, apiKey });
+        startUserDataStream({ prisma, pub, userId, apiKey, secretKey });
 
         try {
             const account = await fetchBinanceAccount({ apiKey, secretKey });
@@ -830,7 +852,10 @@ async function main() {
     }
 
     const shutdown = async () => {
-        for (const [uid, entry] of userStreams.entries()) { try { clearInterval(entry.keepAliveTimer); entry.ws?.close(); } catch { } userStreams.delete(uid); }
+        for (const [uid, entry] of userStreams.entries()) {
+            stopUserDataStream(uid, entry);
+            userStreams.delete(uid);
+        }
         streamConsumer.stop();
         reconciliationWorker.stop();
         try { await sub.quit(); await pub.quit(); await stream.quit(); await prisma.$disconnect(); } catch { }

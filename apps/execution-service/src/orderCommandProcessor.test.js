@@ -123,6 +123,7 @@ test("submits order through Binance with clientOrderId and publishes scoped even
     assert.equal(executed[0].clientOrderId, "order_123");
     assert.equal(executed[0].quantity, "0.001");
     assert.equal(userStreams[0].userId, "user_123");
+    assert.equal(userStreams[0].secretKey, "secret-key");
     assert.equal(prisma.commands.get("order_123").status, "SUBMITTED");
     assert.equal(prisma.commands.get("order_123").binanceOrderId, 98765);
     assert.equal(prisma.events[0].status, "SUBMITTED");
@@ -283,6 +284,7 @@ test("cancels one open order through Binance and publishes scoped lifecycle even
 
     assert.equal(result.outcome, "canceled");
     assert.equal(startedUserStreams[0].userId, "user_123");
+    assert.equal(startedUserStreams[0].secretKey, "secret-key");
     assert.equal(canceled[0].symbol, "BTCUSDT");
     assert.equal(canceled[0].orderId, "order_123");
     assert.equal(canceled[0].binanceOrderId, 98765);

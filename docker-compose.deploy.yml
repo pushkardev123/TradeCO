@@ -25,6 +25,7 @@ x-service-env: &service-env
   ACCOUNT_CACHE_MS: ${ACCOUNT_CACHE_MS:-5000}
   SYMBOL_CACHE_MS: ${SYMBOL_CACHE_MS:-600000}
   BINANCE_API_BASE: ${BINANCE_API_BASE:-https://testnet.binance.vision}
+  BINANCE_WS_API_BASE: ${BINANCE_WS_API_BASE:-wss://ws-api.testnet.binance.vision/ws-api/v3}
 
 services:
   postgres:

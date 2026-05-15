@@ -36,6 +36,7 @@ AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
 BINANCE_API_BASE=https://testnet.binance.vision
 BINANCE_WS_BASE=wss://stream.testnet.binance.vision
+BINANCE_WS_API_BASE=wss://ws-api.testnet.binance.vision/ws-api/v3
 ```
 
 For PM2 or any non-Compose deployment, also provide direct runtime URLs:
@@ -142,5 +143,6 @@ All backend, event-service, and execution-service environment variables must be 
 - `.env.deploy` is not committed.
 - `BINANCE_API_BASE` remains `https://testnet.binance.vision`.
 - `BINANCE_WS_BASE` remains `wss://stream.testnet.binance.vision`.
+- `BINANCE_WS_API_BASE` remains `wss://ws-api.testnet.binance.vision/ws-api/v3`.
 - User Binance Testnet API keys are entered during signup/onboarding only.
 - Do not put API keys, JWTs, refresh tokens, signatures, or encrypted credential payloads in logs or deployment docs.
