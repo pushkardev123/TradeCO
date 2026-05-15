@@ -3,10 +3,12 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "node src/index.js"
+        "dev": "node src/index.js",
+        "test": "node --test src/*.test.js"
     },
     "dependencies": {
         "@prisma/client": "^6.19.1",
+        "@tradeco/redis-stream-contracts": "0.0.0",
         "dotenv": "^17.2.3",
         "redis": "^5.10.0",
         "ws": "^8.18.3"

@@ -1,4 +1,8 @@
 import "dotenv/config";
+import {
+    createOrderCommandConsumerName,
+    getOrderStreamConfig,
+} from "@tradeco/redis-stream-contracts";
 
 const SERVICE = "execution";
 const DEFAULT_BINANCE_API_BASE = "https://testnet.binance.vision";
@@ -36,6 +40,12 @@ function parseInteger(name, fallback, errors, { min = 0, max = Number.MAX_SAFE_I
         return fallback;
     }
     return value;
+}
+
+function parseBoolean(name, fallback = false) {
+    const raw = readEnv(name);
+    if (raw === undefined) return fallback;
+    return ["1", "true", "yes", "on"].includes(String(raw).toLowerCase());
 }
 
 function validateUrl(name, value, protocols, errors) {
@@ -140,6 +150,13 @@ const accountCacheMs = parseInteger("ACCOUNT_CACHE_MS", 5000, errors, { min: 0 }
 const symbolCacheMs = parseInteger("SYMBOL_CACHE_MS", 600000, errors, { min: 0 });
 const marketMode = readEnv("MARKET_MODE", "all").toLowerCase();
 const symbols = parseSymbols(readEnv("SYMBOLS", "btcusdt"), errors);
+let orderStreamConfig = null;
+
+try {
+    orderStreamConfig = getOrderStreamConfig(process.env);
+} catch (error) {
+    errors.push(error?.message || "Redis stream configuration is invalid");
+}
 
 if (marketMode !== "all" && marketMode !== "symbols") {
     errors.push("MARKET_MODE must be either all or symbols");
@@ -158,7 +175,15 @@ export const config = Object.freeze({
     redisUrl,
     encryptionKey,
     commandsChannel: readEnv("COMMANDS_CHANNEL", "commands:order:submit"),
+    legacyCommandsChannelEnabled: parseBoolean("LEGACY_COMMANDS_CHANNEL_ENABLED", false),
     eventsChannel: readEnv("EVENTS_CHANNEL", "events:order:status"),
+    orderCommandStream: orderStreamConfig.streams.commands,
+    orderCommandDlqStream: orderStreamConfig.streams.commandDlq,
+    orderCommandConsumerGroup: orderStreamConfig.consumerGroups.execution,
+    orderCommandConsumerName: readEnv("ORDER_COMMAND_CONSUMER_NAME", createOrderCommandConsumerName()),
+    orderCommandReadCount: orderStreamConfig.readCount,
+    orderCommandClaimIdleMs: orderStreamConfig.claimIdleMs,
+    orderCommandMaxAttempts: orderStreamConfig.maxAttempts,
     pricesChannel: readEnv("PRICES_CHANNEL", "events:price:update"),
     balancesChannel: readEnv("BALANCES_CHANNEL", "events:account:balances"),
     chartReqChannel: readEnv("CHART_REQ_CHANNEL", "events:chart:request"),
@@ -181,7 +206,15 @@ export function logStartupConfig() {
         databaseUrl: redactUrl(config.databaseUrl),
         redisUrl: redactUrl(config.redisUrl),
         commandsChannel: config.commandsChannel,
+        legacyCommandsChannelEnabled: config.legacyCommandsChannelEnabled,
         eventsChannel: config.eventsChannel,
+        orderCommandStream: config.orderCommandStream,
+        orderCommandDlqStream: config.orderCommandDlqStream,
+        orderCommandConsumerGroup: config.orderCommandConsumerGroup,
+        orderCommandConsumerName: config.orderCommandConsumerName,
+        orderCommandReadCount: config.orderCommandReadCount,
+        orderCommandClaimIdleMs: config.orderCommandClaimIdleMs,
+        orderCommandMaxAttempts: config.orderCommandMaxAttempts,
         pricesChannel: config.pricesChannel,
         balancesChannel: config.balancesChannel,
         binanceApiBase: redactUrl(config.binanceApiBase),

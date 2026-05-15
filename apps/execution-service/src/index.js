@@ -5,10 +5,23 @@ import crypto from "crypto";
 import https from "https";
 import querystring from "querystring";
 import { config, logStartupConfig, safeErrorMessage } from "./config.js";
+import {
+    parseLegacyOrderCommandMessage,
+    processOrderCommand,
+} from "./orderCommandProcessor.js";
+import { startOrderStreamConsumer } from "./redisOrderStreamConsumer.js";
 
 const REDIS_URL = config.redisUrl;
 const COMMANDS_CHANNEL = config.commandsChannel;
+const LEGACY_COMMANDS_CHANNEL_ENABLED = config.legacyCommandsChannelEnabled;
 const EVENTS_CHANNEL = config.eventsChannel;
+const ORDER_COMMAND_STREAM = config.orderCommandStream;
+const ORDER_COMMAND_DLQ_STREAM = config.orderCommandDlqStream;
+const ORDER_COMMAND_CONSUMER_GROUP = config.orderCommandConsumerGroup;
+const ORDER_COMMAND_CONSUMER_NAME = config.orderCommandConsumerName;
+const ORDER_COMMAND_READ_COUNT = config.orderCommandReadCount;
+const ORDER_COMMAND_CLAIM_IDLE_MS = config.orderCommandClaimIdleMs;
+const ORDER_COMMAND_MAX_ATTEMPTS = config.orderCommandMaxAttempts;
 const PRICES_CHANNEL = config.pricesChannel;
 // Canonical account/balance fanout channel. Payload:
 // { type: "ACCOUNT_BALANCES", userId, ts, balances: [{ asset, free, locked }] }
@@ -720,18 +733,26 @@ async function main() {
 
     const sub = createClient({ url: REDIS_URL });
     const pub = createClient({ url: REDIS_URL });
+    const stream = createClient({ url: REDIS_URL });
 
     sub.on("error", (e) => console.error("[execution] redis sub error:", safeErrorMessage(e)));
     pub.on("error", (e) => console.error("[execution] redis pub error:", safeErrorMessage(e)));
+    stream.on("error", (e) => console.error("[execution] redis stream error:", safeErrorMessage(e)));
 
     const prisma = new PrismaClient();
 
     await prisma.$connect();
     await sub.connect();
     await pub.connect();
+    await stream.connect();
 
     console.log("[execution] redis connected");
-    console.log(`[execution] subscribing: ${COMMANDS_CHANNEL}`);
+    console.log(`[execution] consuming stream: ${ORDER_COMMAND_STREAM} group=${ORDER_COMMAND_CONSUMER_GROUP} consumer=${ORDER_COMMAND_CONSUMER_NAME}`);
+    if (LEGACY_COMMANDS_CHANNEL_ENABLED) {
+        console.log(`[execution] subscribing legacy commands fallback: ${COMMANDS_CHANNEL}`);
+    } else {
+        console.log(`[execution] legacy commands fallback disabled: ${COMMANDS_CHANNEL}`);
+    }
     console.log(`[execution] subscribing: ${SYMBOL_REQ_CHANNEL}`);
     console.log(`[execution] subscribing: ${ACCOUNT_REQ_CHANNEL}`);
     console.log(`[execution] subscribing: ${CHART_REQ_CHANNEL}`);
@@ -866,62 +887,51 @@ async function main() {
     };
     startBinanceWs();
 
-    await sub.subscribe(COMMANDS_CHANNEL, async (message) => {
-        let cmd; try { cmd = JSON.parse(message); } catch { return; }
-        const orderType = String(cmd?.orderType || "MARKET").toUpperCase();
-
-        // Ensure standard string ID for consistency with Account Requests
-        const uid = String(cmd.userId);
-
-        try {
-            await prisma.orderCommand.upsert({
-                where: { orderId: cmd.orderId },
-                update: { status: "PENDING" },
-                create: { userId: uid, orderId: cmd.orderId, symbol: cmd.symbol, side: cmd.side, type: orderType, quantity: Number(cmd.quantity), status: "PENDING" },
-            });
-        } catch { }
-
-        let binanceApiKey = null;
-        let binanceSecretKey = null;
-
-        try {
-            const credential = await loadActiveExchangeCredential(prisma, uid);
-            binanceApiKey = credential.apiKey;
-            binanceSecretKey = credential.secretKey;
-        } catch (e) {
-            const now = new Date();
-            await prisma.orderEvent.create({ data: { orderId: cmd.orderId, userId: uid, status: "REJECTED", price: null, quantity: Number(cmd.quantity), timestamp: now } }).catch(() => { });
-            await prisma.orderCommand.upsert({ where: { orderId: cmd.orderId }, update: { status: "REJECTED" }, create: { userId: uid, orderId: cmd.orderId, symbol: cmd.symbol, side: cmd.side, type: orderType, quantity: Number(cmd.quantity), status: "REJECTED" } }).catch(() => { });
-            await pub.publish(EVENTS_CHANNEL, JSON.stringify({ orderId: cmd.orderId, userId: uid, status: "REJECTED", reason: e?.message, timestamp: now.toISOString() }));
-            return;
-        }
-
-        // Start stream using the standard string UID
-        startUserDataStream({ prisma, pub, userId: uid, apiKey: binanceApiKey });
-
-        try {
-            const binanceRes = await executeBinanceOrder({ apiKey: binanceApiKey, secretKey: binanceSecretKey, symbol: cmd.symbol, side: cmd.side, orderType, quantity: cmd.quantity, timeInForce: cmd.timeInForce, price: cmd.price, stopPrice: cmd.stopPrice, clientOrderId: cmd.orderId });
-            const transactTime = new Date(binanceRes.transactTime || Date.now());
-
-            await prisma.orderCommand.upsert({
-                where: { orderId: cmd.orderId },
-                update: { status: "SUBMITTED", binanceOrderId: Number(binanceRes.orderId), submittedAt: transactTime },
-                create: { userId: uid, orderId: cmd.orderId, symbol: cmd.symbol, side: cmd.side, type: orderType, quantity: Number(cmd.quantity), status: "SUBMITTED", binanceOrderId: Number(binanceRes.orderId), submittedAt: transactTime },
-            }).catch(() => { });
-
-            await pub.publish(EVENTS_CHANNEL, JSON.stringify({ orderId: cmd.orderId, userId: uid, status: "SUBMITTED", symbol: cmd.symbol, side: cmd.side, orderType, quantity: Number(cmd.quantity), binance: { orderId: binanceRes.orderId, clientOrderId: binanceRes.clientOrderId }, timestamp: transactTime.toISOString() }));
-        } catch (err) {
-            const reason = err?.msg || err?.message || "Binance order failed";
-            const now = new Date();
-            await prisma.orderEvent.create({ data: { orderId: cmd.orderId, userId: uid, status: "REJECTED", price: null, quantity: Number(cmd.quantity), timestamp: now } }).catch(() => { });
-            await prisma.orderCommand.upsert({ where: { orderId: cmd.orderId }, update: { status: "REJECTED", errorMsg: reason }, create: { userId: uid, orderId: cmd.orderId, symbol: cmd.symbol, side: cmd.side, type: orderType, quantity: Number(cmd.quantity), status: "REJECTED", errorMsg: reason } }).catch(() => { });
-            await pub.publish(EVENTS_CHANNEL, JSON.stringify({ orderId: cmd.orderId, userId: uid, status: "REJECTED", reason, timestamp: now.toISOString() }));
-        }
+    const processCommand = (command) => processOrderCommand({
+        command,
+        prisma,
+        pub,
+        eventsChannel: EVENTS_CHANNEL,
+        loadActiveExchangeCredential,
+        startUserDataStream,
+        executeBinanceOrder,
     });
+
+    const streamConsumer = startOrderStreamConsumer({
+        redis: stream,
+        streamName: ORDER_COMMAND_STREAM,
+        groupName: ORDER_COMMAND_CONSUMER_GROUP,
+        consumerName: ORDER_COMMAND_CONSUMER_NAME,
+        dlqStreamName: ORDER_COMMAND_DLQ_STREAM,
+        readCount: ORDER_COMMAND_READ_COUNT,
+        claimIdleMs: ORDER_COMMAND_CLAIM_IDLE_MS,
+        maxAttempts: ORDER_COMMAND_MAX_ATTEMPTS,
+        processCommand,
+        safeErrorMessage,
+    });
+
+    if (LEGACY_COMMANDS_CHANNEL_ENABLED) {
+        await sub.subscribe(COMMANDS_CHANNEL, async (message) => {
+            let command;
+            try {
+                command = parseLegacyOrderCommandMessage(message);
+            } catch (error) {
+                console.warn("[execution] ignored invalid legacy order command:", safeErrorMessage(error));
+                return;
+            }
+
+            try {
+                await processCommand(command);
+            } catch (error) {
+                console.error("[execution] legacy order command failed:", safeErrorMessage(error));
+            }
+        });
+    }
 
     const shutdown = async () => {
         for (const [uid, entry] of userStreams.entries()) { try { clearInterval(entry.keepAliveTimer); entry.ws?.close(); } catch { } userStreams.delete(uid); }
-        try { await sub.quit(); await pub.quit(); await prisma.$disconnect(); } catch { }
+        streamConsumer.stop();
+        try { await sub.quit(); await pub.quit(); await stream.quit(); await prisma.$disconnect(); } catch { }
         process.exit(0);
     };
     process.on("SIGINT", shutdown);

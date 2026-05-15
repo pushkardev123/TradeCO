@@ -1,6 +1,6 @@
 # Order Command Processing and Redis Streams
 
-Status: Backend Redis Stream producer dual-write is implemented. Execution service stream consumption is still pending, so Pub/Sub remains temporarily required.
+Status: Backend Redis Stream producer and execution stream consumer are implemented. Backend still dual-writes Pub/Sub during transition, but execution treats Pub/Sub as fallback-only.
 
 Tracker row: https://www.notion.so/3608ea2b3f8a81ff8e58dbde4c5b164a
 
@@ -23,9 +23,8 @@ Current implementation note:
 - Backend `POST /orders` persists `OrderCommand`, appends the v1 order submit entry to `ORDER_COMMAND_STREAM`, and then publishes JSON to the Redis Pub/Sub channel configured by `COMMANDS_CHANNEL`, defaulting to `commands:order:submit`.
 - If stream append fails after the database create, backend marks the command `STREAM_APPEND_FAILED` when possible and returns `503`. Do not expect the legacy Pub/Sub publish in that failure path.
 - Duplicate submissions with the same authenticated user, `orderId`, and order intent return the existing command response without appending another stream entry. A duplicate for a command in `STREAM_APPEND_FAILED` retries the stream append.
-- Execution service currently subscribes to the legacy Pub/Sub channel and submits orders to Binance Spot Testnet.
+- Execution service consumes `ORDER_COMMAND_STREAM` with consumer group `ORDER_COMMAND_CONSUMER_GROUP` and only subscribes to the legacy Pub/Sub command channel when `LEGACY_COMMANDS_CHANNEL_ENABLED=true`.
 - Event service rejects public `POST /orders` ingress with `410` and tells callers to use the backend API.
-- Redis Streams consumer group handling is not implemented in the execution service yet.
 - The committed stream contract lives in `packages/redis-stream-contracts` and is documented in [Redis Stream Contracts](../architecture/redis-stream-contracts.md).
 
 ## Current Dual-Write Triage Procedure
@@ -39,11 +38,11 @@ Current implementation note:
 3. Confirm backend appended the command stream entry.
    Inspect `ORDER_COMMAND_STREAM`, defaulting to `tradeco:orders:commands:v1`, for an entry with the `orderId` and authenticated `userId`. Backend stream append failures should leave the persisted command in `STREAM_APPEND_FAILED` when the status update succeeds.
 
-4. Confirm backend published the temporary legacy command.
-   Review backend logs for `/orders` errors. The Pub/Sub publish happens only after the database create and stream append succeed.
+4. Confirm execution service is consuming the stream.
+   Execution logs should show `consuming stream: tradeco:orders:commands:v1 group=tradeco:execution:orders:v1`. Inspect pending entries with Redis stream tooling before replaying anything manually.
 
-5. Confirm execution service is subscribed.
-   Execution service logs should show subscription to `COMMANDS_CHANNEL`.
+5. Confirm legacy fallback state.
+   `LEGACY_COMMANDS_CHANNEL_ENABLED` should normally be `false` to avoid duplicate processing while backend dual-writes. Enable it only as an explicit rollback/fallback path if stream consumption is disabled.
 
 6. Confirm credential decrypt succeeded.
    If the command is rejected because credentials cannot load or decrypt, follow [Credential Safety and Testnet Key Rotation](credential-safety-and-key-rotation.md) only when key material is invalid or exposed.
@@ -61,7 +60,7 @@ Current implementation note:
 
 ## Risks
 
-- The command stream is durable, but execution still depends on Pub/Sub until the stream consumer task lands.
+- Backend still dual-writes Pub/Sub until cleanup. If execution legacy fallback is enabled while stream consumption is also active, duplicate processing races are possible.
 - Current order quantities and prices use JavaScript numbers and Prisma `Float`; decimal-safe storage is still a priority risk.
 - Current execution service catches and suppresses some persistence errors during command handling; diagnostics can be incomplete.
 
@@ -87,11 +86,10 @@ Dead-letter message type: `order.command.dead_lettered.v1`.
 
 ## Pending Redis Streams Runtime Procedure
 
-Complete this section after the execution service consumes Redis Streams in code.
+Complete this section after a live Redis-backed smoke test confirms the stream consumer behavior with local infrastructure.
 
-- How execution service claims, acknowledges, retries, and dead-letters commands.
 - How to inspect pending messages with Redis stream commands.
 - How to safely replay or dead-letter a stuck command without duplicating a Binance order.
 - Idempotency checks before retrying a command.
 
-Do not use Redis stream consumer-group recovery commands in incidents until the execution runtime migration is merged and verified.
+Do not use Redis stream consumer-group recovery commands in incidents until live Redis smoke coverage is documented.

@@ -1,12 +1,12 @@
 # Redis Stream Contracts
 
-Status: Contract committed. Backend producer dual-write is implemented; execution stream consumption is pending.
+Status: Contract committed. Backend producer dual-write and execution stream consumption are implemented; legacy Pub/Sub order processing is fallback-only.
 
 Tracker row: https://www.notion.so/3608ea2b3f8a81c78c7ecd629dd7d34f
 
 ## Scope
 
-This document defines the Redis Streams naming and message envelope for asynchronous order processing. The backend now imports `@tradeco/redis-stream-contracts` and appends authenticated order submits to the command stream while temporarily dual-writing the legacy Pub/Sub channel for the current execution service.
+This document defines the Redis Streams naming and message envelope for asynchronous order processing. The backend imports `@tradeco/redis-stream-contracts` and appends authenticated order submits to the command stream while temporarily dual-writing the legacy Pub/Sub channel. The execution service consumes the stream by default and only processes the legacy channel when `LEGACY_COMMANDS_CHANNEL_ENABLED=true`.
 
 ## Streams and Groups
 
@@ -84,6 +84,7 @@ Optional fields:
 - Idempotency must use `commandId` and `orderId` before placing a Binance order.
 - Failed messages should be retried until `ORDER_COMMAND_MAX_ATTEMPTS`, then written to `tradeco:orders:commands:dlq:v1`.
 - A message should be acknowledged only after durable status persistence and safe event publication are complete.
+- Do not enable legacy Pub/Sub order consumption while stream consumption is healthy; backend dual-write would otherwise risk duplicate processing races.
 
 ## Dead Letter Fields
 

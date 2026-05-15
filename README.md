@@ -148,7 +148,7 @@ Responsibilities:
 	•	Trade execution logic
 
 Execution Flow:
-	1.	Consumes ORDER_COMMAND from Redis. The backend now appends v1 Redis Stream commands and temporarily dual-writes Pub/Sub while execution stream consumption is tracked separately.
+	1.	Consumes ORDER_COMMAND from Redis Streams. Legacy Pub/Sub order consumption is fallback-only during the transition.
 	2.	Executes trade on Binance
 	3.	Publishes ORDER_EVENT back to Redis
 
@@ -177,7 +177,7 @@ Redis Streams contract:
 
 - Stream names and message fields are defined in [docs/architecture/redis-stream-contracts.md](docs/architecture/redis-stream-contracts.md).
 - The shared implementation lives in `packages/redis-stream-contracts`.
-- Backend `POST /orders` persists `OrderCommand`, appends `order.submit.requested.v1` to `ORDER_COMMAND_STREAM`, and temporarily publishes `COMMANDS_CHANNEL` for the current execution service.
+- Backend `POST /orders` persists `OrderCommand`, appends `order.submit.requested.v1` to `ORDER_COMMAND_STREAM`, and temporarily publishes `COMMANDS_CHANNEL`; execution consumes the stream by default.
 
 ⸻
 
