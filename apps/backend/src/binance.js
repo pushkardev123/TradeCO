@@ -1,7 +1,8 @@
 import crypto from "crypto";
+import { config } from "./config.js";
 
 export async function getAccountInfo(apiKey, apiSecret) {
-    const base = "https://testnet.binance.vision/api/v3/account";
+    const base = `${config.binanceApiBase}/api/v3/account`;
     const timestamp = Date.now();
     const qs = `timestamp=${timestamp}`;
 
@@ -35,7 +36,7 @@ export async function getMyTrades(apiKey, apiSecret, {
 } = {}) {
     if (!symbol) throw new Error("symbol is required");
 
-    const base = "https://testnet.binance.vision/api/v3/myTrades";
+    const base = `${config.binanceApiBase}/api/v3/myTrades`;
     const timestamp = Date.now();
 
     const params = new URLSearchParams();

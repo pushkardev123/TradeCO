@@ -6,6 +6,12 @@
         "packages/*"
     ],
     "scripts": {
+        "dev:infra:up": "docker compose up -d postgres redis",
+        "dev:infra:down": "docker compose down",
+        "dev:infra:logs": "docker compose logs -f postgres redis",
+        "infra:up": "docker compose up -d postgres redis",
+        "infra:down": "docker compose down",
+        "infra:logs": "docker compose logs -f postgres redis",
         "dev:frontend": "npm --workspace apps/frontend run dev",
         "dev:backend": "npm --workspace apps/backend run dev",
         "dev:execution": "npm --workspace apps/execution-service run dev",

@@ -4,42 +4,32 @@ import { PrismaClient } from "@prisma/client";
 import crypto from "crypto";
 import https from "https";
 import querystring from "querystring";
+import { config, logStartupConfig, safeErrorMessage } from "./config.js";
 
-const REDIS_URL = process.env.REDIS_URL;
-const COMMANDS_CHANNEL = process.env.COMMANDS_CHANNEL || "commands:order:submit";
-const EVENTS_CHANNEL = process.env.EVENTS_CHANNEL || "events:order:status";
-const PRICES_CHANNEL = process.env.PRICES_CHANNEL || "events:price:update";
-const BALANCES_CHANNEL = process.env.BALANCES_CHANNEL || "events:account:balances";
+const REDIS_URL = config.redisUrl;
+const COMMANDS_CHANNEL = config.commandsChannel;
+const EVENTS_CHANNEL = config.eventsChannel;
+const PRICES_CHANNEL = config.pricesChannel;
+const BALANCES_CHANNEL = config.balancesChannel;
 
 // Chart (candlestick / kline) streaming (event-service -> execution-service)
-const CHART_REQ_CHANNEL = process.env.CHART_REQ_CHANNEL || "events:chart:request"; // subscribe/unsubscribe requests
-const CHARTS_CHANNEL = process.env.CHARTS_CHANNEL || "events:chart:update"; // kline updates published here
-const DEFAULT_KLINE_INTERVAL = process.env.DEFAULT_KLINE_INTERVAL || "1m";
+const CHART_REQ_CHANNEL = config.chartReqChannel;
+const CHARTS_CHANNEL = config.chartsChannel;
+const DEFAULT_KLINE_INTERVAL = config.defaultKlineInterval;
 
 // Account info RPC (event-service -> execution-service)
-const ACCOUNT_REQ_CHANNEL = process.env.ACCOUNT_REQ_CHANNEL || "events:account:request";
-const ACCOUNT_RES_CHANNEL = process.env.ACCOUNT_RES_CHANNEL || "events:account:response";
-const ACCOUNT_CACHE_MS = Number(process.env.ACCOUNT_CACHE_MS || 5 * 1000); // 5s (short)
+const ACCOUNT_REQ_CHANNEL = config.accountReqChannel;
+const ACCOUNT_RES_CHANNEL = config.accountResChannel;
+const ACCOUNT_CACHE_MS = config.accountCacheMs;
 
 // Symbol metadata RPC (event-service -> execution-service)
-const SYMBOL_REQ_CHANNEL = process.env.SYMBOL_REQ_CHANNEL || "events:symbol:request";
-const SYMBOL_RES_CHANNEL = process.env.SYMBOL_RES_CHANNEL || "events:symbol:response";
-const SYMBOL_CACHE_MS = Number(process.env.SYMBOL_CACHE_MS || 10 * 60 * 1000); // 10 minutes
-
-if (!REDIS_URL) {
-    console.error("[execution] Missing REDIS_URL. Export it before running.");
-    process.exit(1);
-}
+const SYMBOL_REQ_CHANNEL = config.symbolReqChannel;
+const SYMBOL_RES_CHANNEL = config.symbolResChannel;
+const SYMBOL_CACHE_MS = config.symbolCacheMs;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const KEY_STR = process.env.ENCRYPTION_KEY;
-if (!KEY_STR || KEY_STR.length !== 32) {
-    console.error("[execution] ENCRYPTION_KEY must be set and exactly 32 characters (AES-256 key)");
-    process.exit(1);
-}
-
-const ENC_KEY = Buffer.from(KEY_STR, "utf8");
+const ENC_KEY = Buffer.from(config.encryptionKey, "utf8");
 
 function decrypt(payload) {
     const [ivB64, tagB64, encB64] = String(payload || "").split(".");
@@ -58,8 +48,8 @@ function decrypt(payload) {
     return dec.toString("utf8");
 }
 
-const BINANCE_API_BASE = process.env.BINANCE_API_BASE || "https://testnet.binance.vision";
-const BINANCE_WS_BASE = process.env.BINANCE_WS_BASE || "wss://stream.testnet.binance.vision";
+const BINANCE_API_BASE = config.binanceApiBase;
+const BINANCE_WS_BASE = config.binanceWsBase;
 
 // Per-user userDataStream registry
 const userStreams = new Map(); // userId -> { listenKey, ws, keepAliveTimer, placeholder: boolean }
@@ -698,11 +688,13 @@ async function executeBinanceOrder({ apiKey, secretKey, symbol, side, orderType,
 }
 
 async function main() {
+    logStartupConfig();
+
     const sub = createClient({ url: REDIS_URL });
     const pub = createClient({ url: REDIS_URL });
 
-    sub.on("error", (e) => console.error("[execution] redis sub error:", e));
-    pub.on("error", (e) => console.error("[execution] redis pub error:", e));
+    sub.on("error", (e) => console.error("[execution] redis sub error:", safeErrorMessage(e)));
+    pub.on("error", (e) => console.error("[execution] redis pub error:", safeErrorMessage(e)));
 
     const prisma = new PrismaClient();
 
@@ -822,8 +814,8 @@ async function main() {
         }
     });
 
-    const MARKET_MODE = (process.env.MARKET_MODE || "all").toLowerCase();
-    const SYMBOLS = (process.env.SYMBOLS || "btcusdt").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const MARKET_MODE = config.marketMode;
+    const SYMBOLS = config.symbols;
     let wsUrl = MARKET_MODE === "all" ? `${BINANCE_WS_BASE}/ws/!miniTicker@arr` : `${BINANCE_WS_BASE}/stream?streams=${SYMBOLS.map((s) => `${s}@trade`).join("/")}`;
     let binanceSocket;
     let wsReconnectTimer;
@@ -913,4 +905,4 @@ async function main() {
     process.on("SIGTERM", shutdown);
 }
 
-main().catch((e) => { console.error("[execution] fatal:", e); process.exit(1); });
+main().catch((e) => { console.error("[execution] fatal:", safeErrorMessage(e)); process.exit(1); });

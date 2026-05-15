@@ -1,4 +1,3 @@
-import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcrypt";
@@ -11,24 +10,27 @@ import { signToken } from "./jwt.js";
 import { requireAuth } from "./middleware.js";
 import { getAccountInfo } from "./binance.js";
 import { decrypt } from "./crypto.js";
+import { config, isCorsOriginAllowed, logStartupConfig, safeErrorMessage } from "./config.js";
 
-const PORT = process.env.PORT || 8080;
-const REDIS_URL = process.env.REDIS_URL;
-const COMMANDS_CHANNEL = process.env.COMMANDS_CHANNEL || "commands:order:submit";
-
-if (!REDIS_URL) {
-    console.error("[backend] REDIS_URL missing");
-    process.exit(1);
-}
+const PORT = config.port;
+const REDIS_URL = config.redisUrl;
+const COMMANDS_CHANNEL = config.commandsChannel;
 
 const prisma = new PrismaClient();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin(origin, callback) {
+        if (isCorsOriginAllowed(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error("CORS origin not allowed"));
+    },
+}));
 app.use(express.json());
 
 const redis = createClient({ url: REDIS_URL });
-redis.on("error", (e) => console.error("[backend] redis error:", e));
+redis.on("error", (e) => console.error("[backend] redis error:", safeErrorMessage(e)));
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "backend" }));
 
@@ -445,12 +447,13 @@ app.get("/api/trading/account", requireAuth, async (req, res) => {
 });
 
 async function main() {
+    logStartupConfig();
     await redis.connect();
     console.log("[backend] redis connected");
     app.listen(PORT, () => console.log(`[backend] listening http://localhost:${PORT}`));
 }
 
 main().catch((e) => {
-    console.error("[backend] fatal:", e);
+    console.error("[backend] fatal:", safeErrorMessage(e));
     process.exit(1);
 });
