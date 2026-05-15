@@ -22,8 +22,7 @@ Current implementation facts:
 - Backend registration encrypts both values in `apps/backend/src/index.js`.
 - Encryption uses AES-256-GCM in `apps/backend/src/crypto.js`.
 - `ENCRYPTION_KEY` must be exactly 32 characters and must be available to backend and execution service processes that encrypt or decrypt credentials.
-- Current Prisma schema stores encrypted keys on `User` as `binanceApiKeyEnc` and `binanceSecretKeyEnc`.
-- The target architecture says credentials should move to a separate `ExchangeCredential` model. That migration is not present yet.
+- Current Prisma schema stores encrypted keys in the separate `ExchangeCredential` model. `User` owns identity; `ExchangeCredential` owns exchange-specific credential material.
 
 Official testnet entry points to use when rotating keys:
 
@@ -74,10 +73,10 @@ Rotate the affected Binance Spot Testnet key pair when any of these happen:
    Create a new testnet-only API key pair for the same test account. Store it only in approved secret storage.
 
 5. Replace the credential in TradeCO.
-   Current app limitation: there is no self-service credential rotation endpoint and no separate `ExchangeCredential` model yet. Use one of these approved paths:
+   Current app limitation: there is no self-service credential rotation endpoint yet. Use one of these approved paths:
 
    - Preferred current path for non-incident development accounts: create a new TradeCO account with the replacement testnet keys, then retire the old account.
-   - Incident path when preserving the same TradeCO user is required: have the backend owner perform a reviewed one-off admin update that encrypts the replacement key pair with the deployed `ENCRYPTION_KEY` and updates only that user's encrypted credential fields. Keep the one-off script out of git unless it is sanitized, reviewed, and contains no credential literals.
+   - Incident path when preserving the same TradeCO user is required: have the backend owner perform a reviewed one-off admin update that encrypts the replacement key pair with the deployed `ENCRYPTION_KEY` and creates or updates only that user's active `ExchangeCredential` row. Keep the one-off script out of git unless it is sanitized, reviewed, and contains no credential literals.
 
 6. Clear process-local state.
    Restart the execution service if the affected user had active account or user-data streams, because the current implementation keeps in-memory user stream state. Restart backend only if its environment changed.
@@ -118,14 +117,13 @@ Operational QA when rotating a real testnet key:
 
 ## Risks
 
-- Current credential storage is on `User`; the future `ExchangeCredential` model will change the exact update path.
+- Manual `ExchangeCredential` updates can affect the wrong exchange account if `userId`, `exchange`, or `isActive` filters are too broad.
 - Manual DB updates can corrupt encrypted payloads if the wrong `ENCRYPTION_KEY` is used.
 - Restarting execution service can interrupt active market and user streams.
 - Signed Binance URLs include signatures and must be treated as secret material.
 
 ## Pending Implementation-Dependent Work
 
-- Add a separate `ExchangeCredential` model and update this runbook with model-specific rotation steps.
 - Add a reviewed credential update or rotation endpoint/script so operators do not need an ad hoc admin update.
 - Add refresh-token rotation docs once the access/refresh implementation exists.
 - Move frontend web access tokens away from `localStorage`; this is tracked separately as an auth safety risk.

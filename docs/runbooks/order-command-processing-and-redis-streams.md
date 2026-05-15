@@ -1,6 +1,6 @@
 # Order Command Processing and Redis Streams
 
-Status: Initial structure. Redis Streams recovery is pending because current checked-in code still uses Redis Pub/Sub for command transport.
+Status: Redis Streams contract committed. Runtime migration is pending because current checked-in code still uses Redis Pub/Sub for command transport.
 
 Tracker row: https://www.notion.so/3608ea2b3f8a81ff8e58dbde4c5b164a
 
@@ -24,6 +24,7 @@ Current implementation note:
 - Execution service subscribes to that channel and submits orders to Binance Spot Testnet.
 - Event service rejects public `POST /orders` ingress with `410` and tells callers to use the backend API.
 - Redis Streams consumer group handling is not implemented in the checked-in code yet.
+- The committed stream contract lives in `packages/redis-stream-contracts` and is documented in [Redis Stream Contracts](../architecture/redis-stream-contracts.md).
 
 ## Current Pub/Sub Triage Procedure
 
@@ -58,17 +59,34 @@ Current implementation note:
 - Current order quantities and prices use JavaScript numbers and Prisma `Float`; decimal-safe storage is still a priority risk.
 - Current execution service catches and suppresses some persistence errors during command handling; diagnostics can be incomplete.
 
-## Pending Redis Streams Procedure
+## Redis Streams Contract
 
-Complete this section only after Redis Streams are implemented in code.
+Committed names:
 
-Expected future sections:
+| Purpose | Name |
+| --- | --- |
+| Order command stream | `tradeco:orders:commands:v1` |
+| Order command dead-letter stream | `tradeco:orders:commands:dlq:v1` |
+| Order event stream | `tradeco:orders:events:v1` |
+| Execution consumer group | `tradeco:execution:orders:v1` |
 
-- Stream name and consumer group names.
+The v1 order submit message type is `order.submit.requested.v1`. The backend must derive `userId` from the verified access token, persist `OrderCommand`, and then append a sanitized stream entry. Trading numeric values must be positive decimal strings, not JavaScript numbers.
+
+Idempotency keys:
+
+- `commandId`: stable stream-processing idempotency key.
+- `orderId`: backend-created order id persisted before stream append.
+
+Dead-letter message type: `order.command.dead_lettered.v1`.
+
+## Pending Redis Streams Runtime Procedure
+
+Complete this section only after backend and execution services actually use Redis Streams in code.
+
 - How backend appends commands and records stream IDs.
 - How execution service claims, acknowledges, retries, and dead-letters commands.
 - How to inspect pending messages with Redis stream commands.
 - How to safely replay or dead-letter a stuck command without duplicating a Binance order.
 - Idempotency checks before retrying a command.
 
-Do not add stream-specific operational commands here until the stream names and consumer group behavior are committed.
+Do not use Redis stream recovery commands in incidents until the runtime migration is merged and verified.

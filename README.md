@@ -76,7 +76,7 @@ graph TD
     User((User))
     FE[Frontend / Next.js]
     ES[Event Service / WebSocket Server]
-    Redis[(Redis Pub/Sub)]
+    Redis[(Redis Streams + Pub/Sub)]
     API[Backend API]
     Exec[Execution Service]
     DB[(PostgreSQL)]
@@ -148,7 +148,7 @@ Responsibilities:
 	•	Trade execution logic
 
 Execution Flow:
-	1.	Consumes ORDER_COMMAND
+	1.	Consumes ORDER_COMMAND from Redis. The v1 Redis Streams contract is committed; runtime migration from Pub/Sub is tracked separately.
 	2.	Executes trade on Binance
 	3.	Publishes ORDER_EVENT back to Redis
 
@@ -167,11 +167,17 @@ Authentication Flow
 Order Lifecycle (Asynchronous)
 	1.	User places an order from the UI
 	2.	Frontend sends the order to the authenticated Backend API
-	3.	Backend validates the JWT, derives user identity from the token, persists the command, and publishes ORDER_COMMAND to Redis
+	3.	Backend validates the JWT, derives user identity from the token, persists the command, and publishes/appends ORDER_COMMAND to Redis
 	4.	Execution Service consumes and executes on Binance Testnet
 	5.	Binance confirms execution
 	6.	Execution Service persists/fans out ORDER_EVENT updates
 	7.	Event Service pushes scoped updates only to the authenticated user
+
+Redis Streams contract:
+
+- Stream names and message fields are defined in [docs/architecture/redis-stream-contracts.md](docs/architecture/redis-stream-contracts.md).
+- The shared implementation lives in `packages/redis-stream-contracts`.
+- Current checked-in runtime transport still uses Pub/Sub until the backend/execution migration task lands.
 
 ⸻
 
