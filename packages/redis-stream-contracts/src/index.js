@@ -1,4 +1,5 @@
 import { hostname as getHostname } from "node:os";
+export * from "./binanceFilterValidation.js";
 export * from "./realtimeEventContracts.js";
 
 export const STREAM_CONTRACT_VERSION = "1";

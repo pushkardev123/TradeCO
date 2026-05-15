@@ -28,7 +28,9 @@ Current implementation note:
 - If stream append fails after the database create, backend marks the command `STREAM_APPEND_FAILED` when possible and returns `503`. Do not expect the legacy Pub/Sub publish in that failure path.
 - If cancel stream append fails after lifecycle state is persisted, backend marks affected local commands `CANCEL_APPEND_FAILED` and returns `503`.
 - Duplicate submissions with the same authenticated user, `orderId`, and order intent return the existing command response without appending another stream entry. A duplicate for a command in `STREAM_APPEND_FAILED` retries the stream append.
+- Backend validates submit orders against Binance Spot Testnet `exchangeInfo` filters before persistence/stream append. It caches symbol filters briefly and uses `/api/v3/avgPrice` for market-style notional checks.
 - Execution service consumes `ORDER_COMMAND_STREAM` with consumer group `ORDER_COMMAND_CONSUMER_GROUP` and only subscribes to the legacy Pub/Sub command channel when `LEGACY_COMMANDS_CHANNEL_ENABLED=true`.
+- Execution service repeats the same shared filter validation before submitting to Binance as a defense-in-depth check.
 - Execution service routes Binance Spot Testnet REST calls through `apps/execution-service/src/binanceSpotTestnetClient.js`. That client enforces the testnet REST host, centralizes signed request timestamp / `recvWindow` / HMAC / API-key header handling, normalizes Binance errors without signed URLs or credential values, and captures useful `x-mbx-*` rate-limit headers as response metadata.
 - Execution service processes cancel with Binance Spot Testnet `DELETE /api/v3/order` and cancel-all with `DELETE /api/v3/openOrders`, then persists `OrderCommand` / `OrderEvent` state and publishes scoped status events.
 - Event service rejects public `POST /orders` ingress with `410` and tells callers to use the backend API.
@@ -54,7 +56,10 @@ Current implementation note:
 6. Confirm credential decrypt succeeded.
    If the command is rejected because credentials cannot load or decrypt, follow [Credential Safety and Testnet Key Rotation](credential-safety-and-key-rotation.md) only when key material is invalid or exposed.
 
-7. Confirm user-scoped event publication.
+7. Confirm exchange filter validation.
+   Backend and execution both use the shared Binance filter validator in `packages/redis-stream-contracts`. Rejections should include field-level errors such as `LOT_SIZE_STEP`, `PRICE_FILTER_TICK`, or `MIN_NOTIONAL_MIN`.
+
+8. Confirm user-scoped event publication.
    Execution service publishes order status to `EVENTS_CHANNEL`, defaulting to `events:order:status`. Event service forwards scoped order updates only when the message contains a `userId` matching the authenticated WebSocket client.
 
 ## Core Lifecycle API Checks
@@ -90,6 +95,7 @@ Expected local lifecycle statuses:
 - Backend order request derives user identity from the verified access token.
 - Redis Stream entries use `schemaVersion: 1` and one of `order.submit.requested.v1`, `order.cancel.requested.v1`, or `order.cancel_all.requested.v1`.
 - Submit stream entries use decimal strings for quantity, price, and stop price.
+- Submit orders reject Binance filter violations before exchange submission. Covered filters include `LOT_SIZE`, `MARKET_LOT_SIZE`, `PRICE_FILTER`, `MIN_NOTIONAL`, and `NOTIONAL`; optional risk context supports `MAX_NUM_ORDERS`, `MAX_NUM_ALGO_ORDERS`, and `MAX_POSITION`.
 - Cancel stream entries include the backend-authenticated `userId`, internal `orderId`, and symbol; cancel-all stream entries include backend-authenticated `userId` and symbol.
 - Local Redis Stream smoke passes:
 
@@ -112,7 +118,6 @@ Expected local lifecycle statuses:
 ## Risks
 
 - Backend still dual-writes Pub/Sub until cleanup. If execution legacy fallback is enabled while stream consumption is also active, duplicate processing races are possible.
-- Current order quantities and prices use JavaScript numbers and Prisma `Float`; decimal-safe storage is still a priority risk.
 - Current execution service catches and suppresses some persistence errors during command handling; diagnostics can be incomplete.
 
 ## Redis Streams Contract

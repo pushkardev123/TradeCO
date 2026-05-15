@@ -12,6 +12,9 @@ import {
     parseUserDataStreamMessage,
 } from "./binanceUserDataStream.js";
 import {
+    validateOrderAgainstExchangeFilters,
+} from "@tradeco/redis-stream-contracts";
+import {
     parseLegacyOrderCommandMessage,
     processOrderCommand,
 } from "./orderCommandProcessor.js";
@@ -560,6 +563,10 @@ async function fetchSymbolInfoFromBinance(symbol) {
     return binanceClient.fetchSymbolInfo({ symbol });
 }
 
+async function fetchAveragePriceFromBinance(symbol) {
+    return binanceClient.fetchAveragePrice({ symbol });
+}
+
 async function getSymbolInfo(symbol) {
     const sym = String(symbol || "").toUpperCase();
     const cached = cacheGetSymbol(sym);
@@ -613,6 +620,22 @@ async function executeBinanceOrder({ apiKey, secretKey, symbol, side, orderType,
         stopPrice,
         clientOrderId,
     });
+}
+
+async function validateOrderBeforeSubmit({ command }) {
+    const symbolInfo = await getSymbolInfo(command.symbol);
+    const averagePrice = shouldFetchAveragePriceForValidation(command)
+        ? await fetchAveragePriceFromBinance(command.symbol)
+        : null;
+
+    return validateOrderAgainstExchangeFilters(command, symbolInfo.data, {
+        averagePrice: averagePrice?.price,
+    });
+}
+
+function shouldFetchAveragePriceForValidation(command = {}) {
+    const orderType = String(command.orderType || command.type || "MARKET").toUpperCase();
+    return !command.price || orderType === "MARKET" || orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT";
 }
 
 async function executeBinanceCancelOrder({ apiKey, secretKey, symbol, orderId, binanceOrderId }) {
@@ -798,6 +821,7 @@ async function main() {
         pub,
         eventsChannel: EVENTS_CHANNEL,
         loadActiveExchangeCredential,
+        validateOrderBeforeSubmit,
         startUserDataStream,
         executeBinanceOrder,
         executeBinanceCancelOrder,

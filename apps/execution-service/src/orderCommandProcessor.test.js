@@ -202,6 +202,43 @@ test("rejects command when credentials cannot be loaded", async () => {
     assert.match(pub.messages[0].message.reason, /credential/i);
 });
 
+test("rejects command before Binance submission when exchange filters fail", async () => {
+    const prisma = createMemoryPrisma();
+    const pub = createPub();
+
+    const result = await processOrderCommand({
+        command: {
+            orderId: "order_filter_123",
+            userId: "user_123",
+            symbol: "BTCUSDT",
+            side: "BUY",
+            orderType: "LIMIT",
+            quantity: "0.00015",
+            price: "65000.251",
+        },
+        prisma,
+        pub,
+        eventsChannel: "events:order:status",
+        validateOrderBeforeSubmit: async () => ({
+            ok: false,
+            errors: [
+                { field: "quantity", code: "LOT_SIZE_STEP", message: "quantity must align to stepSize 0.0001" },
+                { field: "price", code: "PRICE_FILTER_TICK", message: "price must align to tickSize 0.01" },
+            ],
+        }),
+        loadActiveExchangeCredential: () => assert.fail("credentials should not load for invalid filters"),
+        startUserDataStream: () => assert.fail("stream should not start for invalid filters"),
+        executeBinanceOrder: () => assert.fail("order should not execute for invalid filters"),
+    });
+
+    assert.equal(result.outcome, "rejected");
+    assert.equal(result.reason, "exchange-filters");
+    assert.equal(prisma.commands.get("order_filter_123").status, "REJECTED");
+    assert.equal(pub.messages[0].message.status, "REJECTED");
+    assert.match(pub.messages[0].message.reason, /stepSize 0\.0001/);
+    assert.match(pub.messages[0].message.reason, /tickSize 0\.01/);
+});
+
 test("skips already submitted commands before placing another Binance order", async () => {
     const pub = createPub();
     const prisma = createMemoryPrisma([{

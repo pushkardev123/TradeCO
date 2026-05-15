@@ -137,6 +137,7 @@ All endpoints derive `userId` from the verified access token and reject `userId`
 - The backend must derive `userId` from the verified access token.
 - The backend must build commands with the shared stream contract builders.
 - The backend must read `ORDER_COMMAND_STREAM` through `getOrderStreamConfig`.
+- Submit commands must pass shared Binance filter validation before stream append. The validator normalizes `exchangeInfo` filters and checks decimal-safe quantity, price, and notional constraints before Binance submission.
 - Duplicate submits must be same-user and same-intent before they are treated as idempotent; a mismatched duplicate `orderId` must not append another stream entry.
 - Until the execution service consumes streams, the backend also publishes the legacy `COMMANDS_CHANNEL` message after a successful stream append.
 - Cancel and cancel-all commands must not be published to the legacy Pub/Sub command channel.

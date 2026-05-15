@@ -1,4 +1,7 @@
-import { ORDER_COMMAND_TYPES } from "@tradeco/redis-stream-contracts";
+import {
+    ORDER_COMMAND_TYPES,
+    formatExchangeFilterErrors,
+} from "@tradeco/redis-stream-contracts";
 import {
     decimalString,
     divideDecimalStrings,
@@ -101,6 +104,7 @@ async function processOrderSubmitCommand({
     pub,
     eventsChannel,
     loadActiveExchangeCredential,
+    validateOrderBeforeSubmit,
     startUserDataStream,
     executeBinanceOrder,
 } = {}) {
@@ -138,6 +142,33 @@ async function processOrderSubmitCommand({
             status: "PENDING",
         },
     });
+
+    if (validateOrderBeforeSubmit) {
+        let validation;
+        try {
+            validation = await validateOrderBeforeSubmit({ command: normalized });
+        } catch (error) {
+            await rejectOrder({
+                prisma,
+                pub,
+                eventsChannel,
+                command: normalized,
+                reason: error?.message || "Exchange filter validation failed",
+            });
+            return { outcome: "rejected", reason: "exchange-filter-validation", orderId: normalized.orderId };
+        }
+
+        if (validation && validation.ok === false) {
+            await rejectOrder({
+                prisma,
+                pub,
+                eventsChannel,
+                command: normalized,
+                reason: formatExchangeFilterErrors(validation.errors) || "Order violates Binance filters",
+            });
+            return { outcome: "rejected", reason: "exchange-filters", orderId: normalized.orderId };
+        }
+    }
 
     let credential;
     try {

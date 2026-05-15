@@ -18,6 +18,7 @@ import {
 } from "./authService.js";
 import { clearRefreshCookie, getRefreshTokenFromRequest, setRefreshCookie } from "./cookies.js";
 import { getDecryptedExchangeCredential } from "./credentials.js";
+import { validateOrderDraftAgainstBinanceFilters } from "./binanceExchangeFilters.js";
 import {
     appendOrderCommandStreamEntry,
     appendOrderSubmitStreamEntry,
@@ -598,6 +599,14 @@ app.post("/orders", requireAuth, async (req, res) => {
             orderId,
             requestId: getRequestIdFromHeaders(req.headers),
         });
+        const filterValidation = await validateOrderDraftAgainstBinanceFilters(orderDraft);
+        if (!filterValidation.ok) {
+            return res.status(400).json({
+                ok: false,
+                error: "Order violates Binance filters",
+                errors: filterValidation.errors,
+            });
+        }
         const command = {
             type: "ORDER_CREATED",
             orderId,

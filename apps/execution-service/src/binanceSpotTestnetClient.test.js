@@ -285,3 +285,40 @@ test("constructs signed order reconciliation read requests", async () => {
         `https://testnet.binance.vision/api/v3/openOrders?${openOrdersQuery}&signature=${hmac(openOrdersQuery)}`,
     );
 });
+
+test("fetches symbol filters and average price from public testnet endpoints", async () => {
+    const { calls, transport } = createMockTransport([
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify({
+                symbols: [{
+                    symbol: "BTCUSDT",
+                    baseAsset: "BTC",
+                    quoteAsset: "USDT",
+                    filters: [
+                        { filterType: "LOT_SIZE", minQty: "0.00010000", maxQty: "100.00000000", stepSize: "0.00010000" },
+                        { filterType: "PRICE_FILTER", minPrice: "0.01000000", maxPrice: "1000000.00000000", tickSize: "0.01000000" },
+                        { filterType: "MIN_NOTIONAL", minNotional: "5.00000000", applyToMarket: true, avgPriceMins: 5 },
+                    ],
+                }],
+            }),
+        },
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify({ mins: 5, price: "65000.25", closeTime: 1700000000000 }),
+        },
+    ]);
+    const client = createBinanceSpotTestnetClient({ transport });
+
+    const symbolInfo = await client.fetchSymbolInfo({ symbol: "btcusdt" });
+    const averagePrice = await client.fetchAveragePrice({ symbol: "btcusdt" });
+
+    assert.equal(calls[0].url, "https://testnet.binance.vision/api/v3/exchangeInfo?symbol=BTCUSDT");
+    assert.equal(calls[1].url, "https://testnet.binance.vision/api/v3/avgPrice?symbol=BTCUSDT");
+    assert.equal(symbolInfo.symbol, "BTCUSDT");
+    assert.equal(symbolInfo.filters.length, 3);
+    assert.equal(symbolInfo.minQty, "0.00010000");
+    assert.equal(averagePrice.price, "65000.25");
+});

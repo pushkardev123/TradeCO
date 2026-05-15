@@ -173,6 +173,23 @@ export class BinanceSpotTestnetClient {
             applyMinToMarket: notional?.applyMinToMarket ?? false,
             applyMaxToMarket: notional?.applyMaxToMarket ?? false,
             avgPriceMins: notional?.avgPriceMins ?? null,
+            filters,
+        }, metadata);
+    }
+
+    async fetchAveragePrice({ symbol } = {}) {
+        const sym = normalizeSymbol(symbol);
+        const { data, metadata } = await this.request({
+            method: "GET",
+            path: "/api/v3/avgPrice",
+            params: { symbol: sym },
+        });
+
+        return attachMetadata({
+            symbol: sym,
+            mins: data?.mins ?? null,
+            price: data?.price,
+            closeTime: data?.closeTime ?? null,
         }, metadata);
     }
 

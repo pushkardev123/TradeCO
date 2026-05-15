@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 03:31 IST
+Last updated: 2026-05-16 05:16 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `5c5314b` (`Migrate user streams to Binance WebSocket API`)
+- Current pushed commit: `cff1027` (`Record user stream migration completion`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -31,6 +31,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `431455d` | Add event contract tests | Shared realtime channel/payload contract tests for Redis Pub/Sub and WebSocket envelopes. |
 | `352367a` | Broadcast scoped order and account events | Event-service contract-backed private fanout, runtime channel override validation, and full rejected-order realtime payloads. |
 | `5c5314b` | Migrate user data stream to current WebSocket API flow | Binance WebSocket API user stream subscription, signed request helper, reconnect handling, env/deploy docs, and removal of old REST stream-key path. |
+| `cff1027` | Record user stream migration completion | Ledger-only commit after user-stream migration. |
 
 ## Working Rules
 
@@ -215,3 +216,35 @@ This sequence will be reconciled against Notion before each item starts.
   - `git diff --check`: pass.
 - Verification limitation:
   - Live Binance user data subscription was not opened during automated QA because no seeded encrypted user Testnet credential was exercised in the smoke harness. The signed request builder, event envelope parser, reconnect path, Docker startup, and order/account event handlers are covered deterministically.
+
+### Active: Implement full Binance filter and risk validation layer
+
+- Notion page: `3608ea2b-3f8a-81a5-b368-e1bbaf30f97a`
+- Status at start: `Ready`, `P1`, high risk.
+- Branch: `main`
+- Started: 2026-05-16 05:04 IST
+- Goal: block invalid orders before Binance submission using the same decimal-safe exchange filter rules in backend and execution service.
+- Binance docs checked:
+  - Official Spot API filters: `PRICE_FILTER`, `LOT_SIZE`, `MARKET_LOT_SIZE`, `MIN_NOTIONAL`, `NOTIONAL`, `MAX_NUM_ORDERS`, `MAX_NUM_ALGO_ORDERS`, and `MAX_POSITION`.
+- Implementation:
+  - Added shared Binance filter normalization and validation in `packages/redis-stream-contracts`.
+  - Validates price tick/min/max, quantity min/max/step, market lot size, min/max notional, and optional max-order/max-position context without JavaScript float math.
+  - Backend now fetches/caches public `exchangeInfo`, uses `avgPrice` for market-style notional checks, and returns field-level 400 errors before persistence/Redis append.
+  - Execution service repeats shared filter validation before loading credentials, starting user streams, or submitting to Binance.
+  - Binance client now exposes public average price and retains raw symbol filters for validation.
+  - Runbook and stream contract docs now document filter validation and cache behavior.
+- Verification:
+  - `npm run test:stream-contracts`: pass.
+  - `npm --workspace apps/backend run test`: pass.
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `node --check packages/redis-stream-contracts/src/binanceFilterValidation.js`: pass.
+  - `node --check apps/backend/src/binanceExchangeFilters.js`: pass.
+  - `node --check apps/execution-service/src/index.js`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml config --quiet`: pass.
+  - `docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build`: pass.
+  - Backend/execution-service Docker logs show clean startup.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `npm run smoke:p0-auth-boundary`: pass.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
+  - `git diff --check`: pass.
