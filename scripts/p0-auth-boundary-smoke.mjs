@@ -15,6 +15,7 @@ const frontendLogout = read("apps/frontend/app/logout/page.js");
 const backendIndex = read("apps/backend/src/index.js");
 const backendMiddleware = read("apps/backend/src/middleware.js");
 const eventService = read("apps/event-service/src/index.js");
+const eventAuth = read("apps/event-service/src/auth.js");
 const executionService = read("apps/execution-service/src/index.js");
 const executionConfig = read("apps/execution-service/src/config.js");
 const readme = read("README.md");
@@ -37,8 +38,12 @@ assert.doesNotMatch(backendIndex, /userId:\s*["']test-user["']/);
 
 assert.match(eventService, /function rejectUserIdParam/);
 assert.match(eventService, /if \(hasUserIdParam\(u\)\)/);
+assert.match(eventService, /if \(!token\) \{\s+socket\.write\("HTTP\/1\.1 401 Unauthorized\\r\\n\\r\\n"\)/);
+assert.match(eventService, /verifyAccessToken\(token, JWT_SECRET\)/);
 assert.match(eventService, /HTTP\/1\.1 403 Forbidden/);
 assert.match(eventService, /return sendJson\(res, 410, \{ ok: false, error: "Submit orders through the backend API" \}\)/);
+assert.match(eventAuth, /if \(!decoded\?\.sub \|\| !decoded\?\.sid\)/);
+assert.doesNotMatch(eventAuth, /decoded\?\.userId|decoded\?\.id/);
 
 assert.match(executionService, /BALANCES_CHANNEL = config\.balancesChannel/);
 assert.match(executionConfig, /balancesChannel: readEnv\("BALANCES_CHANNEL", "events:account:balances"\)/);

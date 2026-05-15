@@ -1,8 +1,15 @@
 import http from "http";
 import { WebSocketServer } from "ws";
 import { createClient } from "redis";
-import jwt from "jsonwebtoken";
 import { config, getCorsAllowOrigin, logStartupConfig, redactUrl, safeErrorMessage } from "./config.js";
+import {
+    canReceiveBroadcast,
+    getBearerToken,
+    getUserIdParam,
+    hasUserIdParam,
+    shouldBroadcastChannelMessage,
+    verifyAccessToken,
+} from "./auth.js";
 
 const PORT = config.port;
 const REDIS_URL = config.redisUrl;
@@ -141,15 +148,6 @@ function sendJson(res, status, body) {
     return res.end(JSON.stringify(body));
 }
 
-function hasUserIdParam(url) {
-    return url.searchParams.has("userId") || url.searchParams.has("user_id");
-}
-
-function getUserIdParam(url) {
-    if (!hasUserIdParam(url)) return null;
-    return url.searchParams.get("userId") ?? url.searchParams.get("user_id") ?? "";
-}
-
 function rejectUserIdParam(url, user, res) {
     const supplied = getUserIdParam(url);
     if (supplied === null) return false;
@@ -167,25 +165,6 @@ function rejectUserIdParam(url, user, res) {
     return true;
 }
 
-function getBearerToken(req) {
-    const header = String(req.headers.authorization || "");
-    const [type, token] = header.split(" ");
-    if (type !== "Bearer" || !token) return null;
-    return token;
-}
-
-function verifyAccessToken(token) {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const id = decoded?.userId || decoded?.id || decoded?.sub;
-    if (!id) {
-        const err = new Error("Token missing user identity");
-        err.statusCode = 401;
-        throw err;
-    }
-
-    return { id: String(id), email: decoded?.email || null };
-}
-
 function requireHttpUser(req, res) {
     const token = getBearerToken(req);
     if (!token) {
@@ -194,7 +173,7 @@ function requireHttpUser(req, res) {
     }
 
     try {
-        return verifyAccessToken(token);
+        return verifyAccessToken(token, JWT_SECRET);
     } catch (e) {
         const status = e?.statusCode || 401;
         sendJson(res, status, { ok: false, error: status === 503 ? "JWT_SECRET missing" : "Invalid/expired token" });
@@ -398,29 +377,27 @@ const wss = new WebSocketServer({ noServer: true });
 // Track live clients
 const clients = new Set();
 
-// Only accept WS upgrades on /prices. Token is optional for public market data,
-// but scoped order/account updates are delivered only when it verifies.
+// Only accept authenticated WS upgrades on /prices. Market data can be public at the
+// producer level, but this app websocket also carries scoped account/order updates.
 server.on("upgrade", (req, socket, head) => {
     const u = new URL(req.url || "/", `http://localhost:${PORT}`);
     if (u.pathname !== "/prices") return socket.destroy();
 
-    let user = null;
     const token = u.searchParams.get("token");
-    if (token) {
-        try {
-            user = verifyAccessToken(token);
-        } catch {
-            socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-            return socket.destroy();
-        }
+    if (!token) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return socket.destroy();
+    }
+
+    let user;
+    try {
+        user = verifyAccessToken(token, JWT_SECRET);
+    } catch {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return socket.destroy();
     }
 
     if (hasUserIdParam(u)) {
-        if (!user) {
-            socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-            return socket.destroy();
-        }
-
         const suppliedUserId = String(getUserIdParam(u) || "");
         if (suppliedUserId && suppliedUserId !== user.id) {
             socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -445,7 +422,7 @@ wss.on("connection", (ws) => {
             type: "HELLO",
             message: "connected to /prices",
             authenticated: Boolean(ws.user),
-            note: "Broadcasting public market data; scoped order/account updates require a verified token",
+            note: "Broadcasting realtime updates for the verified access-token user",
             channels: {
                 orders: EVENTS_CHANNEL,
                 prices: PRICES_CHANNEL,
@@ -467,23 +444,10 @@ wss.on("connection", (ws) => {
     });
 });
 
-function getMessageUserId(message) {
-    try {
-        let payload = JSON.parse(message);
-        if (typeof payload === "string") payload = JSON.parse(payload);
-        return payload?.userId ? String(payload.userId) : null;
-    } catch {
-        return null;
-    }
-}
-
-function isScopedChannel(channel) {
-    return channel === EVENTS_CHANNEL || channel === BALANCES_CHANNEL || channel === ACCOUNT_RES_CHANNEL;
-}
+const SCOPED_CHANNELS = [EVENTS_CHANNEL, BALANCES_CHANNEL, ACCOUNT_RES_CHANNEL];
 
 function broadcast(channel, message) {
-    const scopedUserId = getMessageUserId(message);
-    if (isScopedChannel(channel) && !scopedUserId) return;
+    if (!shouldBroadcastChannelMessage({ channel, message, scopedChannels: SCOPED_CHANNELS })) return;
 
     const raw = JSON.stringify({
         type: "REDIS_EVENT",
@@ -498,7 +462,7 @@ function broadcast(channel, message) {
             continue;
         }
 
-        if (scopedUserId && ws.user?.id !== scopedUserId) continue;
+        if (!canReceiveBroadcast({ ws, channel, message, scopedChannels: SCOPED_CHANNELS })) continue;
         ws.send(raw);
     }
 }

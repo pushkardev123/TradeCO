@@ -3,7 +3,9 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "node src/index.js"
+        "dev": "node src/index.js",
+        "test": "node --test src/*.test.js",
+        "test:auth": "node --test src/auth.test.js"
     },
     "dependencies": {
         "@prisma/client": "^6.19.1",
