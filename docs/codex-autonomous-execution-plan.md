@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 05:16 IST
+Last updated: 2026-05-16 05:18 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `cff1027` (`Record user stream migration completion`)
+- Current pushed commit: `5aaea86` (`Add Binance exchange filter validation`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -32,6 +32,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `352367a` | Broadcast scoped order and account events | Event-service contract-backed private fanout, runtime channel override validation, and full rejected-order realtime payloads. |
 | `5c5314b` | Migrate user data stream to current WebSocket API flow | Binance WebSocket API user stream subscription, signed request helper, reconnect handling, env/deploy docs, and removal of old REST stream-key path. |
 | `cff1027` | Record user stream migration completion | Ledger-only commit after user-stream migration. |
+| `5aaea86` | Implement full Binance filter and risk validation layer | Shared decimal-safe Binance filter validation, backend/execution enforcement before submission, field-level errors, and deploy-path verification. |
 
 ## Working Rules
 
@@ -217,7 +218,7 @@ This sequence will be reconciled against Notion before each item starts.
 - Verification limitation:
   - Live Binance user data subscription was not opened during automated QA because no seeded encrypted user Testnet credential was exercised in the smoke harness. The signed request builder, event envelope parser, reconnect path, Docker startup, and order/account event handlers are covered deterministically.
 
-### Active: Implement full Binance filter and risk validation layer
+### Completed: Implement full Binance filter and risk validation layer
 
 - Notion page: `3608ea2b-3f8a-81a5-b368-e1bbaf30f97a`
 - Status at start: `Ready`, `P1`, high risk.
