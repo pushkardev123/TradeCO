@@ -29,6 +29,7 @@ Current implementation note:
 - If cancel stream append fails after lifecycle state is persisted, backend marks affected local commands `CANCEL_APPEND_FAILED` and returns `503`.
 - Duplicate submissions with the same authenticated user, `orderId`, and order intent return the existing command response without appending another stream entry. A duplicate for a command in `STREAM_APPEND_FAILED` retries the stream append.
 - Execution service consumes `ORDER_COMMAND_STREAM` with consumer group `ORDER_COMMAND_CONSUMER_GROUP` and only subscribes to the legacy Pub/Sub command channel when `LEGACY_COMMANDS_CHANNEL_ENABLED=true`.
+- Execution service routes Binance Spot Testnet REST calls through `apps/execution-service/src/binanceSpotTestnetClient.js`. That client enforces the testnet REST host, centralizes signed request timestamp / `recvWindow` / HMAC / API-key header handling, normalizes Binance errors without signed URLs or credential values, and captures useful `x-mbx-*` rate-limit headers as response metadata.
 - Execution service processes cancel with Binance Spot Testnet `DELETE /api/v3/order` and cancel-all with `DELETE /api/v3/openOrders`, then persists `OrderCommand` / `OrderEvent` state and publishes scoped status events.
 - Event service rejects public `POST /orders` ingress with `410` and tells callers to use the backend API.
 - The committed stream contract lives in `packages/redis-stream-contracts` and is documented in [Redis Stream Contracts](../architecture/redis-stream-contracts.md).
@@ -104,6 +105,7 @@ Expected local lifecycle statuses:
 
 - Event service does not accept public order placement commands.
 - Order command and latest order event share the expected `orderId` and `userId`.
+- Execution-service Binance client unit tests cover deterministic signing, safe error parsing, testnet URL enforcement, order request construction, cancel request construction, and cancel-all request construction without live Binance credentials.
 - Cancel and cancel-all tests use mocks and must not require live Binance credentials.
 - Logs do not contain API keys, signed URLs, JWTs, refresh tokens, or decrypted credential values.
 

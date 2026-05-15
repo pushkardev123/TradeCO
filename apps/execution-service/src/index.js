@@ -2,9 +2,8 @@ import WebSocket from "ws";
 import { createClient } from "redis";
 import { PrismaClient } from "@prisma/client";
 import crypto from "crypto";
-import https from "https";
-import querystring from "querystring";
 import { config, logStartupConfig, safeErrorMessage } from "./config.js";
+import { createBinanceSpotTestnetClient } from "./binanceSpotTestnetClient.js";
 import {
     parseLegacyOrderCommandMessage,
     processOrderCommand,
@@ -91,6 +90,7 @@ async function loadActiveExchangeCredential(prisma, userId) {
 
 const BINANCE_API_BASE = config.binanceApiBase;
 const BINANCE_WS_BASE = config.binanceWsBase;
+const binanceClient = createBinanceSpotTestnetClient({ baseUrl: BINANCE_API_BASE });
 
 // Per-user userDataStream registry
 const userStreams = new Map(); // userId -> { listenKey, ws, keepAliveTimer, placeholder: boolean }
@@ -244,59 +244,16 @@ function accountCacheSet(userId, data) {
     accountCache.set(userId, { ts: Date.now(), data });
 }
 
-function binanceRequest({ method, path, apiKey, body }) {
-    return new Promise((resolve, reject) => {
-        const url = `${BINANCE_API_BASE}${path}`;
-        const req = https.request(
-            url,
-            {
-                method,
-                headers: {
-                    "X-MBX-APIKEY": apiKey,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            },
-            (res) => {
-                let data = "";
-                res.on("data", (c) => (data += c));
-                res.on("end", () => {
-                    let json;
-                    try {
-                        json = data ? JSON.parse(data) : {};
-                    } catch {
-                        json = { raw: data };
-                    }
-                    if (res.statusCode && res.statusCode >= 400) {
-                        const msg = json?.msg || json?.message || `HTTP ${res.statusCode}`;
-                        const err = new Error(msg);
-                        err.statusCode = res.statusCode;
-                        err.body = json;
-                        return reject(err);
-                    }
-                    resolve(json);
-                });
-            }
-        );
-        req.on("error", reject);
-        if (body) req.write(body);
-        req.end();
-    });
-}
-
 async function createListenKey(apiKey) {
-    const res = await binanceRequest({ method: "POST", path: "/api/v3/userDataStream", apiKey });
-    if (!res?.listenKey) throw new Error("Failed to create listenKey");
-    return res.listenKey;
+    return binanceClient.createListenKey({ apiKey });
 }
 
 async function keepAliveListenKey(apiKey, listenKey) {
-    const body = querystring.stringify({ listenKey });
-    await binanceRequest({ method: "PUT", path: "/api/v3/userDataStream", apiKey, body });
+    await binanceClient.keepAliveListenKey({ apiKey, listenKey });
 }
 
 async function closeListenKey(apiKey, listenKey) {
-    const body = querystring.stringify({ listenKey });
-    await binanceRequest({ method: "DELETE", path: "/api/v3/userDataStream", apiKey, body });
+    await binanceClient.closeListenKey({ apiKey, listenKey });
 }
 
 function mapBinanceOrderStatusToLocal(X) {
@@ -558,77 +515,14 @@ function cacheSetSymbol(symbol, data) {
     symbolInfoCache.set(key, { data, ts: Date.now() });
 }
 
-function httpsJsonGet(url) {
-    return new Promise((resolve, reject) => {
-        const req = https.request(url, { method: "GET" }, (res) => {
-            let data = "";
-            res.on("data", (c) => (data += c));
-            res.on("end", () => {
-                try {
-                    const json = JSON.parse(data || "{}");
-                    if (res.statusCode && res.statusCode >= 400) {
-                        return reject(new Error(json?.msg || `HTTP ${res.statusCode}`));
-                    }
-                    resolve(json);
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        });
-        req.on("error", reject);
-        req.end();
-    });
-}
-
-// ... (fetchKlineSnapshotFromBinance, fetchSymbolInfoFromBinance, getSymbolInfo, signQuery - unchanged)
-
-// Re-include helper functions for brevity
 async function fetchKlineSnapshotFromBinance(symbol, interval, limit = 50) {
-    const sym = String(symbol || "").toUpperCase();
-    const iv = String(interval || DEFAULT_KLINE_INTERVAL).toLowerCase();
-    const lim = Math.max(1, Math.min(Number(limit) || 500, 1000));
-    const qs = querystring.stringify({ symbol: sym, interval: iv, limit: lim });
-    const url = `${BINANCE_API_BASE}/api/v3/klines?${qs}`;
-    const arr = await httpsJsonGet(url);
-    if (!Array.isArray(arr)) throw new Error("klines response is not an array");
-    const candles = arr.map((k) => {
-        const startTime = Number(k?.[0]);
-        const open = Number(k?.[1]);
-        const high = Number(k?.[2]);
-        const low = Number(k?.[3]);
-        const close = Number(k?.[4]);
-        const volume = Number(k?.[5]);
-        const closeTime = Number(k?.[6]);
-        if (!Number.isFinite(startTime) || !Number.isFinite(closeTime)) return null;
-        if (![open, high, low, close].every((x) => Number.isFinite(x))) return null;
-        return {
-            time: Math.floor(startTime / 1000),
-            open, high, low, close,
-            volume: Number.isFinite(volume) ? volume : 0,
-            startTime, closeTime,
-        };
-    }).filter(Boolean);
-    return { symbol: sym, interval: iv, candles };
+    return binanceClient.fetchKlineSnapshot({ symbol, interval: interval || DEFAULT_KLINE_INTERVAL, limit });
 }
+
 async function fetchSymbolInfoFromBinance(symbol) {
-    const sym = String(symbol || "").toUpperCase();
-    const qs = querystring.stringify({ symbol: sym });
-    const url = `${BINANCE_API_BASE}/api/v3/exchangeInfo?${qs}`;
-    const json = await httpsJsonGet(url);
-    const s = json?.symbols?.[0];
-    if (!s) throw new Error("symbol not found");
-    const filters = Array.isArray(s.filters) ? s.filters : [];
-    const lot = filters.find((f) => f.filterType === "LOT_SIZE");
-    const priceFilter = filters.find((f) => f.filterType === "PRICE_FILTER");
-    const notional = filters.find((f) => f.filterType === "MIN_NOTIONAL") || filters.find((f) => f.filterType === "NOTIONAL");
-    return {
-        symbol: sym, baseAsset: s.baseAsset, quoteAsset: s.quoteAsset,
-        minQty: lot?.minQty, maxQty: lot?.maxQty, stepSize: lot?.stepSize,
-        tickSize: priceFilter?.tickSize, minPrice: priceFilter?.minPrice, maxPrice: priceFilter?.maxPrice,
-        minNotional: notional?.minNotional, maxNotional: notional?.maxNotional,
-        applyMinToMarket: notional?.applyMinToMarket ?? false, applyMaxToMarket: notional?.applyMaxToMarket ?? false, avgPriceMins: notional?.avgPriceMins ?? null,
-    };
+    return binanceClient.fetchSymbolInfo({ symbol });
 }
+
 async function getSymbolInfo(symbol) {
     const sym = String(symbol || "").toUpperCase();
     const cached = cacheGetSymbol(sym);
@@ -637,36 +531,9 @@ async function getSymbolInfo(symbol) {
     cacheSetSymbol(sym, data);
     return { fromCache: false, data };
 }
-function signQuery(query, secret) {
-    return crypto.createHmac("sha256", secret).update(query).digest("hex");
-}
 
 async function fetchBinanceAccount({ apiKey, secretKey }) {
-    const params = { timestamp: Date.now(), recvWindow: 5000 };
-    const query = querystring.stringify(params);
-    const signature = signQuery(query, secretKey);
-    const url = `${BINANCE_API_BASE}/api/v3/account?${query}&signature=${signature}`;
-    return await httpsJsonGetWithApiKey(url, apiKey);
-}
-
-function httpsJsonGetWithApiKey(url, apiKey) {
-    return new Promise((resolve, reject) => {
-        const req = https.request(url, { method: "GET", headers: { "X-MBX-APIKEY": apiKey } }, (res) => {
-            let data = "";
-            res.on("data", (c) => (data += c));
-            res.on("end", () => {
-                let json;
-                try { json = data ? JSON.parse(data) : {}; } catch { json = { raw: data }; }
-                if (res.statusCode && res.statusCode >= 400) {
-                    const msg = json?.msg || json?.message || `HTTP ${res.statusCode}`;
-                    const err = new Error(msg); err.statusCode = res.statusCode; err.body = json; return reject(err);
-                }
-                resolve(json);
-            });
-        });
-        req.on("error", reject);
-        req.end();
-    });
+    return binanceClient.getAccount({ apiKey, secretKey });
 }
 
 function normalizeBalances(balances) {
@@ -689,87 +556,35 @@ function pickPinnedBalances(all, pinnedAssets) {
 }
 
 async function executeBinanceOrder({ apiKey, secretKey, symbol, side, orderType, quantity, timeInForce, price, stopPrice, clientOrderId }) {
-    const type = String(orderType || "MARKET").toUpperCase();
-    const mappedType = type === "STOP_MARKET" ? "STOP_LOSS" : type;
-    const params = {
-        symbol: String(symbol || "").toUpperCase(),
-        side: String(side || "").toUpperCase(),
-        type: mappedType,
-        timestamp: Date.now(),
-        recvWindow: 5000,
-    };
-    if (quantity === undefined || quantity === null) throw new Error("quantity is required");
-    params.quantity = quantity;
-    if (clientOrderId) params.newClientOrderId = String(clientOrderId);
-    if (mappedType === "LIMIT") {
-        if (price === undefined || price === null || Number(price) <= 0) throw new Error("LIMIT requires a valid price");
-        params.price = price;
-        params.timeInForce = String(timeInForce || "GTC").toUpperCase();
-    }
-    if (mappedType === "STOP_LOSS" || mappedType === "TAKE_PROFIT") {
-        if (stopPrice === undefined || stopPrice === null || Number(stopPrice) <= 0) throw new Error(`${mappedType} requires a valid stopPrice`);
-        params.stopPrice = stopPrice;
-    }
-    const query = querystring.stringify(params);
-    const signature = signQuery(query, secretKey);
-    const path = `/api/v3/order?${query}&signature=${signature}`;
-    return new Promise((resolve, reject) => {
-        const req = https.request(`${BINANCE_API_BASE}${path}`, { method: "POST", headers: { "X-MBX-APIKEY": apiKey } }, (res) => {
-            let data = "";
-            res.on("data", (chunk) => (data += chunk));
-            res.on("end", () => {
-                try {
-                    const json = JSON.parse(data);
-                    if (json.code && json.code < 0) return reject(json);
-                    resolve(json);
-                } catch (e) { reject(e); }
-            });
-        });
-        req.on("error", reject);
-        req.end();
+    return binanceClient.placeOrder({
+        apiKey,
+        secretKey,
+        symbol,
+        side,
+        orderType,
+        quantity,
+        timeInForce,
+        price,
+        stopPrice,
+        clientOrderId,
     });
 }
 
 async function executeBinanceCancelOrder({ apiKey, secretKey, symbol, orderId, binanceOrderId }) {
-    const params = {
-        symbol: String(symbol || "").toUpperCase(),
-        timestamp: Date.now(),
-        recvWindow: 5000,
-    };
-
-    if (binanceOrderId !== undefined && binanceOrderId !== null && binanceOrderId !== "") {
-        params.orderId = binanceOrderId;
-    } else {
-        params.origClientOrderId = String(orderId || "");
-    }
-
-    if (!params.symbol) throw new Error("symbol is required");
-    if (!params.orderId && !params.origClientOrderId) throw new Error("orderId is required");
-
-    const query = querystring.stringify(params);
-    const signature = signQuery(query, secretKey);
-    return binanceRequest({
-        method: "DELETE",
-        path: `/api/v3/order?${query}&signature=${signature}`,
+    return binanceClient.cancelOrder({
         apiKey,
+        secretKey,
+        symbol,
+        orderId,
+        binanceOrderId,
     });
 }
 
 async function executeBinanceCancelAllOrders({ apiKey, secretKey, symbol }) {
-    const params = {
-        symbol: String(symbol || "").toUpperCase(),
-        timestamp: Date.now(),
-        recvWindow: 5000,
-    };
-
-    if (!params.symbol) throw new Error("symbol is required");
-
-    const query = querystring.stringify(params);
-    const signature = signQuery(query, secretKey);
-    return binanceRequest({
-        method: "DELETE",
-        path: `/api/v3/openOrders?${query}&signature=${signature}`,
+    return binanceClient.cancelAllOpenOrders({
         apiKey,
+        secretKey,
+        symbol,
     });
 }
 
