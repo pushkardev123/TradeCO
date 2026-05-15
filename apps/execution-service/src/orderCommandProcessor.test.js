@@ -105,9 +105,50 @@ test("submits order through Binance with clientOrderId and publishes scoped even
     assert.equal(userStreams[0].userId, "user_123");
     assert.equal(prisma.commands.get("order_123").status, "SUBMITTED");
     assert.equal(prisma.commands.get("order_123").binanceOrderId, 98765);
+    assert.equal(prisma.events[0].status, "SUBMITTED");
+    assert.equal(prisma.events[0].userId, "user_123");
     assert.equal(pub.messages[0].channel, "events:order:status");
     assert.equal(pub.messages[0].message.userId, "user_123");
     assert.equal(pub.messages[0].message.status, "SUBMITTED");
+});
+
+test("persists and broadcasts filled market order status from Binance response", async () => {
+    const prisma = createMemoryPrisma();
+    const pub = createPub();
+
+    const result = await processOrderCommand({
+        command: {
+            orderId: "order_market_123",
+            userId: "user_123",
+            symbol: "BTCUSDT",
+            side: "BUY",
+            orderType: "MARKET",
+            quantity: "0.001",
+        },
+        prisma,
+        pub,
+        eventsChannel: "events:order:status",
+        loadActiveExchangeCredential: async () => ({ apiKey: "api-key", secretKey: "secret-key" }),
+        startUserDataStream: () => {},
+        executeBinanceOrder: async (args) => ({
+            orderId: 54321,
+            clientOrderId: args.clientOrderId,
+            status: "FILLED",
+            executedQty: "0.001",
+            cummulativeQuoteQty: "65.00",
+            transactTime: Date.parse("2026-05-16T00:00:00.000Z"),
+        }),
+    });
+
+    assert.equal(result.outcome, "submitted");
+    assert.equal(prisma.commands.get("order_market_123").status, "FILLED");
+    assert.equal(prisma.commands.get("order_market_123").rawStatus, "FILLED");
+    assert.equal(prisma.commands.get("order_market_123").executedQty, 0.001);
+    assert.equal(prisma.commands.get("order_market_123").avgFillPrice, 65000);
+    assert.equal(prisma.events[0].status, "FILLED");
+    assert.equal(prisma.events[0].price, 65000);
+    assert.equal(pub.messages[0].message.status, "FILLED");
+    assert.equal(pub.messages[0].message.price, 65000);
 });
 
 test("rejects command when credentials cannot be loaded", async () => {
@@ -173,5 +214,6 @@ test("skips already submitted commands before placing another Binance order", as
 
     assert.equal(result.outcome, "skipped");
     assert.equal(pub.messages[0].message.status, "SUBMITTED");
+    assert.equal(pub.messages[0].message.quantity, 0.001);
     assert.equal(pub.messages[0].message.binance.orderId, 98765);
 });

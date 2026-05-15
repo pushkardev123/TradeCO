@@ -17,6 +17,7 @@
         "dev:execution": "npm --workspace apps/execution-service run dev",
         "dev:event": "npm --workspace apps/event-service run dev",
         "smoke:p0-auth-boundary": "node scripts/p0-auth-boundary-smoke.mjs",
+        "smoke:p2-market-order": "node scripts/p2-e2e-market-order-smoke.mjs",
         "smoke:p2-redis-stream": "node scripts/p2-redis-stream-smoke.mjs",
         "test:stream-contracts": "npm --workspace @tradeco/redis-stream-contracts run test"
     }

@@ -49,10 +49,13 @@ export async function processOrderCommand({
     const existing = await prisma.orderCommand.findUnique?.({ where: { orderId: normalized.orderId } });
 
     if (isAlreadySubmitted(existing)) {
-        await publishSubmittedOrderEvent({
+        await publishOrderStatusEvent({
             pub,
             eventsChannel,
             command: commandFromExisting(existing, normalized),
+            status: existing.status || "SUBMITTED",
+            price: existing.avgFillPrice ?? null,
+            quantity: quantityFromExisting(existing, normalized),
             binanceOrderId: existing.binanceOrderId,
             clientOrderId: existing.orderId || normalized.orderId,
             submittedAt: existing.submittedAt || new Date(),
@@ -125,13 +128,26 @@ export async function processOrderCommand({
     }
 
     const transactTime = new Date(binanceRes.transactTime || Date.now());
+    const status = normalizeOrderStatus(binanceRes.status);
+    const executedQty = nullableNumber(binanceRes.executedQty);
+    const cummulativeQuoteQty = nullableNumber(binanceRes.cummulativeQuoteQty);
+    const avgFillPrice = deriveAverageFillPrice({ executedQty, cummulativeQuoteQty });
+    const lastTradeQty = nullableNumber(binanceRes.fills?.at?.(-1)?.qty);
+    const lastTradePrice = nullableNumber(binanceRes.fills?.at?.(-1)?.price);
 
     await prisma.orderCommand.upsert({
         where: { orderId: normalized.orderId },
         update: {
-            status: "SUBMITTED",
+            status,
+            rawStatus: optionalString(binanceRes.status) || null,
             binanceOrderId: Number(binanceRes.orderId),
             submittedAt: transactTime,
+            executedQty: executedQty ?? 0,
+            cummulativeQuoteQty: cummulativeQuoteQty ?? 0,
+            avgFillPrice,
+            lastTradeQty,
+            lastTradePrice,
+            lastExchangeUpdateAt: transactTime,
         },
         create: {
             userId: normalized.userId,
@@ -143,16 +159,38 @@ export async function processOrderCommand({
             price: nullableNumber(normalized.price),
             stopPrice: nullableNumber(normalized.stopPrice),
             timeInForce: normalized.timeInForce || null,
-            status: "SUBMITTED",
+            status,
+            rawStatus: optionalString(binanceRes.status) || null,
             binanceOrderId: Number(binanceRes.orderId),
             submittedAt: transactTime,
+            executedQty: executedQty ?? 0,
+            cummulativeQuoteQty: cummulativeQuoteQty ?? 0,
+            avgFillPrice,
+            lastTradeQty,
+            lastTradePrice,
+            lastExchangeUpdateAt: transactTime,
         },
     });
 
-    await publishSubmittedOrderEvent({
+    const eventQuantity = executedQty ?? Number(normalized.quantity);
+    await prisma.orderEvent.create({
+        data: {
+            orderId: normalized.orderId,
+            userId: normalized.userId,
+            status,
+            price: avgFillPrice,
+            quantity: eventQuantity,
+            timestamp: transactTime,
+        },
+    });
+
+    await publishOrderStatusEvent({
         pub,
         eventsChannel,
         command: normalized,
+        status,
+        price: avgFillPrice,
+        quantity: eventQuantity,
         binanceOrderId: binanceRes.orderId,
         clientOrderId: binanceRes.clientOrderId,
         submittedAt: transactTime,
@@ -222,10 +260,21 @@ function commandFromExisting(existing, fallback) {
     };
 }
 
-async function publishSubmittedOrderEvent({
+function quantityFromExisting(existing, fallback) {
+    const executedQty = Number(existing.executedQty);
+    if (Number.isFinite(executedQty) && executedQty > 0) return executedQty;
+
+    const originalQty = Number(existing.quantity ?? fallback.quantity);
+    return Number.isFinite(originalQty) ? originalQty : 0;
+}
+
+async function publishOrderStatusEvent({
     pub,
     eventsChannel,
     command,
+    status,
+    price,
+    quantity,
     binanceOrderId,
     clientOrderId,
     submittedAt,
@@ -235,11 +284,12 @@ async function publishSubmittedOrderEvent({
     await pub.publish(eventsChannel, JSON.stringify({
         orderId: command.orderId,
         userId: command.userId,
-        status: "SUBMITTED",
+        status,
         symbol: command.symbol,
         side: command.side,
         orderType: command.orderType,
-        quantity: Number(command.quantity),
+        quantity,
+        price,
         binance: {
             orderId: binanceOrderId,
             clientOrderId,
@@ -251,6 +301,24 @@ async function publishSubmittedOrderEvent({
 function nullableNumber(value) {
     if (value === undefined || value === null || value === "") return null;
     return Number(value);
+}
+
+function normalizeOrderStatus(status) {
+    const normalized = optionalString(status)?.toUpperCase();
+
+    if (normalized === "FILLED") return "FILLED";
+    if (normalized === "PARTIALLY_FILLED") return "PARTIALLY_FILLED";
+    if (normalized === "CANCELED") return "CANCELED";
+    if (normalized === "EXPIRED") return "EXPIRED";
+    if (normalized === "REJECTED") return "REJECTED";
+
+    return "SUBMITTED";
+}
+
+function deriveAverageFillPrice({ executedQty, cummulativeQuoteQty }) {
+    if (!Number.isFinite(executedQty) || executedQty <= 0) return null;
+    if (!Number.isFinite(cummulativeQuoteQty) || cummulativeQuoteQty <= 0) return null;
+    return cummulativeQuoteQty / executedQty;
 }
 
 function requiredString(value, fieldName) {

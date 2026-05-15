@@ -60,6 +60,12 @@ Current implementation note:
   npm run smoke:p2-redis-stream
   ```
 
+- Local market-order vertical-slice smoke passes:
+
+  ```sh
+  npm run smoke:p2-market-order
+  ```
+
 - Event service does not accept public order placement commands.
 - Order command and latest order event share the expected `orderId` and `userId`.
 - Logs do not contain API keys, signed URLs, JWTs, refresh tokens, or decrypted credential values.

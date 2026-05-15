@@ -100,3 +100,13 @@ npm run smoke:p2-redis-stream
 ```
 
 This uses isolated smoke stream names, verifies a valid command is consumed and acknowledged, verifies an invalid command is acknowledged into the DLQ, and deletes the smoke streams before exiting.
+
+## 8. Market order vertical-slice smoke check
+
+With local Redis running, verify the backend-to-execution-to-event path for one market order without live Binance credentials:
+
+```sh
+npm run smoke:p2-market-order
+```
+
+This uses a deterministic mocked Binance fill, proves an order command survives until execution starts, persists a successful order event, and verifies the scoped event payload would only broadcast to the authenticated user.
