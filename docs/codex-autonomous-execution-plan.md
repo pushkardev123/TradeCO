@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 10:19 IST
+Last updated: 2026-05-16 10:57 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current local commit: `8ebb957` (`Rebuild trading terminal layout`)
+- Current local commit: `8e42985` (`Add order book and trade tape`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -39,6 +39,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `a7ad07d` | Add advanced single order types | Added quote-sized market orders, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, and LIMIT_MAKER support through shared contracts, backend validation/persistence, execution request building, frontend controls, and Prisma migration. |
 | `0c47b03` | Create tokenized brand system | Added shared brand token package with mobile-reusable semantic tokens, CSS variables/component classes, frontend wiring for core terminal primitives, Docker workspace integration, and focused token tests. |
 | `8ebb957` | Rebuild trading terminal layout | Reworked the terminal around tokenized panel components, mobile section navigation, a tighter desktop grid/sticky control rail, and split table row components for positions, orders, and market board. |
+| `8e42985` | Add order book and trade tape | Added selected-symbol order book and trade tape views backed by event-service market subscriptions, Redis market-detail channels, Binance Testnet depth/aggTrade snapshots and streams, and reconnect-safe execution fanout. |
 
 ## Working Rules
 
@@ -78,15 +79,12 @@ This sequence will be reconciled against Notion before each item starts.
 
 | Order | Notion item | Reason |
 | --- | --- | --- |
-| 1 | Replace Float math with Decimal/string-safe trading values | High trading correctness risk; foundation for validations, reconciliation, and advanced order types. |
-| 2 | Add order and account reconciliation worker | Needed for reliable execution state after async processing or service restarts. |
-| 3 | Add event contract tests | Locks frontend/event payload compatibility before expanding realtime features. |
-| 4 | Broadcast scoped order and account events | Builds on event contracts and existing scoped auth. |
-| 5 | Migrate user data stream to current WebSocket API flow | Binance stream correctness and deprecation risk; may need docs verification. |
-| 6 | Implement full Binance filter and risk validation layer | Depends on string-safe decimal work and exchange info client support. |
-| 7 | Add order book and trade tape | Frontend/realtime expansion after event contracts stabilize. |
-| 8 | Add structured logging and observability baseline | Cross-cutting hardening after core flows stabilize. |
-| 9 | Create production technical presentation and app overview | Final manager/developer narrative after implementation state is stable. |
+| 1 | Add structured logging and observability baseline | Cross-cutting hardening after core flows stabilize. |
+| 2 | Create production technical presentation and app overview | Final manager/developer narrative after implementation state is stable. |
+
+Deferred:
+
+- Add CI pipeline: user explicitly asked to skip CI for now.
 
 ## Active Task Log
 
@@ -431,5 +429,39 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run deploy:compose:up`: pass and rebuilt all app images.
   - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
   - `git diff --check`: pass.
+- Verification limitation:
+  - Browser automation tools were not available in this session, so visual verification was limited to production build, Dockerized `/trade` HTTP 200, and code inspection.
+
+### Completed: Add order book and trade tape
+
+- Notion page: `3608ea2b-3f8a-818f-ae03-c88b8c3b8a64`
+- Status at start: `In progress`, `P1`, medium risk.
+- Branch: `main`
+- Completed: 2026-05-16 10:57 IST
+- Commit: `8e42985` (`Add order book and trade tape`)
+- Goal: show selected-symbol market microstructure in the terminal, including live order book and trade tape views that survive symbol changes and remain usable on desktop and mobile.
+- Implementation:
+  - Added shared realtime contract channels and validators for market detail subscribe/unsubscribe requests, order book snapshots/updates, and trade tape updates.
+  - Added event-service `/market/subscribe` and `/market/unsubscribe` endpoints that publish Redis market detail requests and forward market detail fanout over WebSocket.
+  - Added Binance Spot Testnet client methods for depth snapshots and recent aggregate trades, with supported depth-limit normalization.
+  - Added execution-service market detail workers that publish REST snapshots, stream `depth20@100ms` and `aggTrade` updates, and reconnect safely after transient WebSocket/DNS failures.
+  - Added the frontend `Order Book & Tape` panel with selected-symbol subscription lifecycle, responsive order book rows, trade tape rows, spread display, loading/error states, and a mobile `Book` jump target.
+  - Moved table formatting helpers to module scope so the split table row components from the terminal layout remain functional.
+- Verification:
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `npm --workspace apps/event-service run test`: pass.
+  - `npm run test:stream-contracts`: pass.
+  - `npm run test:api-contracts`: pass.
+  - `npm --workspace apps/frontend run lint`: pass with two pre-existing hook dependency warnings only.
+  - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
+  - `npm run deploy:compose:config`: pass.
+  - `npm run deploy:compose:up`: pass and rebuilt all app images.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - Market detail subscribe smoke: `POST /market/subscribe` for `BTCUSDT` returned OK and execution-service connected the Binance Testnet depth/trade stream.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `git diff --check`: pass.
+- Verification note:
+  - During smoke testing, a transient Binance DNS/WebSocket failure exposed an unhandled socket error. The implementation now logs and reconnects instead of crashing.
 - Verification limitation:
   - Browser automation tools were not available in this session, so visual verification was limited to production build, Dockerized `/trade` HTTP 200, and code inspection.
