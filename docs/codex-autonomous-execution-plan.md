@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 09:12 IST
+Last updated: 2026-05-16 09:22 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current local commit: `f7c5dfe` (`Add deploy env preflight validation`)
+- Current local commit: `44c8482` (`Add shared API contracts package`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -34,6 +34,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `cff1027` | Record user stream migration completion | Ledger-only commit after user-stream migration. |
 | `5aaea86` | Implement full Binance filter and risk validation layer | Shared decimal-safe Binance filter validation, backend/execution enforcement before submission, field-level errors, and deploy-path verification. |
 | `f7c5dfe` | Add environment validation and startup config checks; Create runbooks for operations and testnet reset handling | Added deploy env preflight validation, caught/fixed local Postgres role-length startup failure, verified clean Compose recovery, health endpoints, tests, and Redis smokes. |
+| `44c8482` | Create shared API and domain contract packages | Added framework-free API/domain contracts package, moved backend DTO/status constants and frontend realtime/order constants onto shared contracts, verified service tests, frontend build, Compose rebuild, and smokes. |
 
 ## Working Rules
 
@@ -298,3 +299,33 @@ This sequence will be reconciled against Notion before each item starts.
   - Added deploy preflight validation so future operators get a clear env error before Docker initializes broken local state.
 - Verification:
   - Same clean Compose startup, health checks, service tests, and Redis smokes listed in the environment validation task above.
+
+### Completed: Create shared API and domain contract packages
+
+- Notion page: `3608ea2b-3f8a-81f5-a39b-c266b8ef62da`
+- Status at start: `Not started`, `P1`, medium risk.
+- Branch: `main`
+- Completed: 2026-05-16 09:22 IST
+- Commit: `44c8482` (`Add shared API contracts package`)
+- Goal: establish framework-free API/domain contracts reusable by backend, frontend, and future mobile without broad refactoring.
+- Implementation:
+  - Added `@tradeco/api-contracts`.
+  - Added shared API route constants, realtime channel defaults, order side/type/status constants, open/cancel status groups, DTO formatters, and response validators for orders, positions, balances, and auth context.
+  - Backend now imports shared open-order/cancel status constants and order/event/position DTO formatting.
+  - Frontend now imports shared realtime channel defaults and basic order-type choices.
+  - Dockerfile and workspace lockfile now include the new package.
+  - Updated `p0-auth-boundary` smoke to allow the frontend account-balance channel constant to come from the shared package.
+- Verification:
+  - `npm run test:api-contracts`: pass.
+  - `npm --workspace apps/backend run test`: pass.
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `npm --workspace apps/event-service run test`: pass.
+  - `npm run test:stream-contracts`: pass.
+  - `npm --workspace apps/frontend run lint`: pass with existing hook dependency warnings only.
+  - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
+  - `npm run deploy:compose:up`: pass and rebuilt all app images.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `npm run smoke:p0-auth-boundary`: pass.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `git diff --check`: pass.
