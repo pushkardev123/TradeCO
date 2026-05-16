@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 09:29 IST
+Last updated: 2026-05-16 09:53 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current local commit: `c96679b` (`Add frontend reconnect replay recovery`)
+- Current local commit: `a7ad07d` (`Add advanced single order support`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -36,6 +36,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `f7c5dfe` | Add environment validation and startup config checks; Create runbooks for operations and testnet reset handling | Added deploy env preflight validation, caught/fixed local Postgres role-length startup failure, verified clean Compose recovery, health endpoints, tests, and Redis smokes. |
 | `44c8482` | Create shared API and domain contract packages | Added framework-free API/domain contracts package, moved backend DTO/status constants and frontend realtime/order constants onto shared contracts, verified service tests, frontend build, Compose rebuild, and smokes. |
 | `c96679b` | Add reconnect and replay behavior | Frontend now refreshes backend snapshots, resubscribes chart state, tracks reconnect attempts, and exposes realtime replay state after websocket reconnect or tab/mobile resume. |
+| `a7ad07d` | Add advanced single order types | Added quote-sized market orders, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, and LIMIT_MAKER support through shared contracts, backend validation/persistence, execution request building, frontend controls, and Prisma migration. |
 
 ## Working Rules
 
@@ -81,10 +82,9 @@ This sequence will be reconciled against Notion before each item starts.
 | 4 | Broadcast scoped order and account events | Builds on event contracts and existing scoped auth. |
 | 5 | Migrate user data stream to current WebSocket API flow | Binance stream correctness and deprecation risk; may need docs verification. |
 | 6 | Implement full Binance filter and risk validation layer | Depends on string-safe decimal work and exchange info client support. |
-| 7 | Add advanced single order types | Product expansion after validation layer is safer. |
-| 8 | Add order book and trade tape | Frontend/realtime expansion after event contracts stabilize. |
-| 9 | Add structured logging and observability baseline | Cross-cutting hardening after core flows stabilize. |
-| 10 | Create production technical presentation and app overview | Final manager/developer narrative after implementation state is stable. |
+| 7 | Add order book and trade tape | Frontend/realtime expansion after event contracts stabilize. |
+| 8 | Add structured logging and observability baseline | Cross-cutting hardening after core flows stabilize. |
+| 9 | Create production technical presentation and app overview | Final manager/developer narrative after implementation state is stable. |
 
 ## Active Task Log
 
@@ -348,3 +348,38 @@ This sequence will be reconciled against Notion before each item starts.
   - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
   - `npm run smoke:p0-auth-boundary`: pass.
   - `git diff --check`: pass.
+
+### Completed: Add advanced single order types
+
+- Notion page: `3608ea2b-3f8a-81fa-909a-cc3c8d6f672a`
+- Status at start: `Not started`, `P2`, medium risk.
+- Branch: `main`
+- Completed: 2026-05-16 09:53 IST
+- Commit: `a7ad07d` (`Add advanced single order support`)
+- Goal: extend single-order support after the risk/filter layer so advanced Binance Spot Testnet order types submit through the same authenticated backend and Redis Stream command pipeline.
+- Implementation:
+  - Added first-class `quoteOrderQty` support for MARKET orders through stream contracts, API DTOs, backend drafts, Prisma persistence, execution normalization, and Binance request building.
+  - Added migration `20260516093000_quote_order_qty`, making `OrderCommand.quantity` nullable and adding `OrderCommand.quoteOrderQty`.
+  - Extended order-type rules for `STOP_LOSS_LIMIT`, `TAKE_PROFIT`, `TAKE_PROFIT_LIMIT`, and `LIMIT_MAKER`, including price/stopPrice/timeInForce validation and Binance request params.
+  - Updated the frontend order ticket with advanced order tabs, quote-vs-base market sizing, stop/limit price controls, and time-in-force controls.
+  - Added `NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS` as a frontend feature flag and deploy env validation.
+- Verification:
+  - `npm run test:stream-contracts`: pass.
+  - `npm run test:api-contracts`: pass.
+  - `npm --workspace apps/backend run test`: pass.
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `npm --workspace apps/event-service run test`: pass.
+  - `npx prisma validate --schema apps/backend/prisma/schema.prisma` with local `DATABASE_URL`: pass.
+  - `npx prisma generate --schema apps/backend/prisma/schema.prisma` with local `DATABASE_URL`: pass.
+  - `npm --workspace apps/frontend run lint`: pass with existing hook dependency warnings only.
+  - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
+  - `npm run deploy:compose:check-env`: pass.
+  - `npm run deploy:compose:up`: pass and rebuilt all app images.
+  - Migration log: `20260516093000_quote_order_qty` applied successfully.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `npm run smoke:p0-auth-boundary`: pass.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `git diff --check`: pass.
+- Verification limitation:
+  - Browser automation tools were not available in this session and the Node REPL environment did not have Playwright installed, so visual verification was limited to production build, `/trade` HTTP 200, and code inspection.
