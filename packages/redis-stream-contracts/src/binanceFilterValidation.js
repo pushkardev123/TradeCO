@@ -12,6 +12,7 @@ export const BINANCE_FILTER_TYPES = Object.freeze({
 const LIMIT_PRICE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT", "LIMIT_MAKER"]);
 const STOP_PRICE_ORDER_TYPES = new Set(["STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"]);
 const MARKET_NOTIONAL_ORDER_TYPES = new Set(["MARKET", "STOP_LOSS", "TAKE_PROFIT"]);
+const QUOTE_ORDER_QTY_ORDER_TYPES = new Set(["MARKET"]);
 const ORDER_TYPE_ALIASES = Object.freeze({
     STOP_MARKET: "STOP_LOSS",
 });
@@ -46,8 +47,16 @@ export function validateOrderAgainstExchangeFilters(order = {}, symbolInfo = {},
         pushError(errors, "symbol", "SYMBOL_MISMATCH", `symbol must match ${filters.symbol}`);
     }
 
-    if (!normalizedOrder.quantity) {
-        pushError(errors, "quantity", "QUANTITY_DECIMAL", "quantity must be a positive decimal string");
+    if (!normalizedOrder.quantity && !normalizedOrder.quoteOrderQty) {
+        pushError(errors, "quantity", "QUANTITY_REQUIRED", "quantity or quoteOrderQty is required");
+    }
+
+    if (normalizedOrder.quantity && normalizedOrder.quoteOrderQty) {
+        pushError(errors, "quoteOrderQty", "QUOTE_ORDER_QTY_EXCLUSIVE", "quantity and quoteOrderQty are mutually exclusive");
+    }
+
+    if (normalizedOrder.quoteOrderQty && !QUOTE_ORDER_QTY_ORDER_TYPES.has(normalizedOrder.orderType)) {
+        pushError(errors, "quoteOrderQty", "QUOTE_ORDER_QTY_UNSUPPORTED", "quoteOrderQty is only supported for MARKET orders");
     }
 
     const quantityFilter = selectQuantityFilter(normalizedOrder.orderType, filters);
@@ -110,6 +119,7 @@ function normalizeOrder(order) {
         side: optionalString(order.side)?.toUpperCase() || "",
         orderType,
         quantity: positiveDecimalString(order.quantity),
+        quoteOrderQty: optionalPositiveDecimalString(order.quoteOrderQty),
         price: optionalPositiveDecimalString(order.price),
         stopPrice: optionalPositiveDecimalString(order.stopPrice),
     };
@@ -208,12 +218,10 @@ function validatePriceFilter({ errors, field, filter, value }) {
 }
 
 function validateNotionalFilters({ errors, order, filters, marketReferencePrice }) {
-    if (!order.quantity) return;
+    if (!order.quantity && !order.quoteOrderQty) return;
 
-    const notionalPrice = selectNotionalPrice(order, marketReferencePrice);
-    if (!notionalPrice) return;
-
-    const notional = multiplyDecimals(order.quantity, notionalPrice);
+    const notional = selectNotionalValue(order, marketReferencePrice);
+    if (!notional) return;
     const marketLike = MARKET_NOTIONAL_ORDER_TYPES.has(order.orderType);
 
     if (filters.minNotional && (!marketLike || filters.minNotional.applyToMarket)) {
@@ -228,6 +236,13 @@ function validateNotionalFilters({ errors, order, filters, marketReferencePrice 
             validateMaxNotional(errors, notional, filters.notional.maxNotional, BINANCE_FILTER_TYPES.notional);
         }
     }
+}
+
+function selectNotionalValue(order, marketReferencePrice) {
+    if (order.quoteOrderQty) return order.quoteOrderQty;
+    const notionalPrice = selectNotionalPrice(order, marketReferencePrice);
+    if (!notionalPrice || !order.quantity) return null;
+    return multiplyDecimals(order.quantity, notionalPrice);
 }
 
 function selectNotionalPrice(order, marketReferencePrice) {

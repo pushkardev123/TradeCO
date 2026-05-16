@@ -76,6 +76,14 @@ function requireString(values, name, errors) {
     return value || "";
 }
 
+function validateOptionalBoolean(values, name, errors) {
+    const value = values.get(name);
+    if (!value) return;
+    if (!["true", "false"].includes(value.toLowerCase())) {
+        errors.push(`${name} must be true or false.`);
+    }
+}
+
 function main() {
     const errors = [];
 
@@ -162,6 +170,7 @@ function main() {
         parseUrl(name, values.get(name), ["http:", "https:"], errors);
     }
     parseUrl("NEXT_PUBLIC_WS_URL", values.get("NEXT_PUBLIC_WS_URL"), ["ws:", "wss:"], errors);
+    validateOptionalBoolean(values, "NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS", errors);
 
     if (errors.length > 0) {
         console.error("Deploy env validation failed:");

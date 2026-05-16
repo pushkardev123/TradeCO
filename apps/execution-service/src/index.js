@@ -607,7 +607,7 @@ function pickPinnedBalances(all, pinnedAssets) {
     return all.filter((b) => set.has(b.asset));
 }
 
-async function executeBinanceOrder({ apiKey, secretKey, symbol, side, orderType, quantity, timeInForce, price, stopPrice, clientOrderId }) {
+async function executeBinanceOrder({ apiKey, secretKey, symbol, side, orderType, quantity, quoteOrderQty, timeInForce, price, stopPrice, clientOrderId }) {
     return binanceClient.placeOrder({
         apiKey,
         secretKey,
@@ -615,6 +615,7 @@ async function executeBinanceOrder({ apiKey, secretKey, symbol, side, orderType,
         side,
         orderType,
         quantity,
+        quoteOrderQty,
         timeInForce,
         price,
         stopPrice,
@@ -635,6 +636,7 @@ async function validateOrderBeforeSubmit({ command }) {
 
 function shouldFetchAveragePriceForValidation(command = {}) {
     const orderType = String(command.orderType || command.type || "MARKET").toUpperCase();
+    if (command.quoteOrderQty && !command.quantity) return false;
     return !command.price || orderType === "MARKET" || orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT";
 }
 

@@ -15,6 +15,7 @@ const ORDER_TYPE_ALIASES = Object.freeze({
 const LIMIT_PRICE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT", "LIMIT_MAKER"]);
 const STOP_PRICE_ORDER_TYPES = new Set(["STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"]);
 const TIME_IN_FORCE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"]);
+const QUOTE_ORDER_QTY_ORDER_TYPES = new Set(["MARKET"]);
 const TIME_IN_FORCE = new Set(["GTC", "IOC", "FOK"]);
 
 export function createOrderSubmitDraftFromRequest({
@@ -27,13 +28,14 @@ export function createOrderSubmitDraftFromRequest({
     const symbol = normalizeToken(body.symbol);
     const side = normalizeToken(body.side);
     const orderType = normalizeOrderType(body.orderType);
-    const quantity = decimalStringFromInput(body.quantity);
+    const quantity = optionalDecimalStringFromInput(body.quantity);
+    const quoteOrderQty = optionalDecimalStringFromInput(body.quoteOrderQty);
     const price = optionalDecimalStringFromInput(body.price);
     const stopPrice = optionalDecimalStringFromInput(body.stopPrice);
     const timeInForce = normalizeTimeInForce({ orderType, value: body.timeInForce });
     const createdAtIso = toIsoString(createdAt);
 
-    validateOrderRequestFields({ symbol, side, orderType, quantity, price, stopPrice, timeInForce });
+    validateOrderRequestFields({ symbol, side, orderType, quantity, quoteOrderQty, price, stopPrice, timeInForce });
 
     const command = {
         commandId: orderId,
@@ -43,6 +45,7 @@ export function createOrderSubmitDraftFromRequest({
         side,
         orderType,
         quantity,
+        quoteOrderQty,
         price,
         stopPrice,
         timeInForce,
@@ -66,6 +69,7 @@ export function createOrderSubmitDraftFromRequest({
         side,
         orderType,
         quantity,
+        quoteOrderQty,
         price,
         stopPrice,
         timeInForce,
@@ -189,6 +193,7 @@ export function isSameOrderIntent(existingCommand, orderDraft) {
         existingCommand.side === orderDraft.side &&
         existingCommand.type === orderDraft.orderType &&
         decimalFieldMatches(existingCommand.quantity, orderDraft.quantity) &&
+        nullableDecimalFieldMatches(existingCommand.quoteOrderQty, orderDraft.quoteOrderQty) &&
         nullableDecimalFieldMatches(existingCommand.price, orderDraft.price) &&
         nullableDecimalFieldMatches(existingCommand.stopPrice, orderDraft.stopPrice) &&
         nullableStringFieldMatches(existingCommand.timeInForce, orderDraft.timeInForce)
@@ -205,15 +210,27 @@ export function getRequestIdFromHeaders(headers = {}) {
     return optionalString(value);
 }
 
-function validateOrderRequestFields({ symbol, side, orderType, quantity, price, stopPrice, timeInForce }) {
+function validateOrderRequestFields({ symbol, side, orderType, quantity, quoteOrderQty, price, stopPrice, timeInForce }) {
     if (!symbol) {
         throw badRequest("symbol is required");
     }
     if (side !== "BUY" && side !== "SELL") {
         throw badRequest("side must be BUY or SELL");
     }
-    if (!isPositiveNumericString(quantity)) {
-        throw badRequest("quantity must be > 0");
+    if (QUOTE_ORDER_QTY_ORDER_TYPES.has(orderType)) {
+        if (!isPositiveNumericString(quantity) && !isPositiveNumericString(quoteOrderQty)) {
+            throw badRequest("quantity or quoteOrderQty must be > 0");
+        }
+        if (isPositiveNumericString(quantity) && isPositiveNumericString(quoteOrderQty)) {
+            throw badRequest("quantity and quoteOrderQty are mutually exclusive");
+        }
+    } else {
+        if (!isPositiveNumericString(quantity)) {
+            throw badRequest("quantity must be > 0");
+        }
+        if (quoteOrderQty !== undefined) {
+            throw badRequest("quoteOrderQty is only supported for MARKET orders");
+        }
     }
     if (LIMIT_PRICE_ORDER_TYPES.has(orderType) && !isPositiveNumericString(price)) {
         throw badRequest(`${orderType} requires a valid price`);
@@ -234,7 +251,7 @@ function normalizeOrderType(value) {
 function normalizeTimeInForce({ orderType, value }) {
     const timeInForce = normalizeToken(value);
 
-    if (!timeInForce && orderType === "LIMIT") {
+    if (!timeInForce && TIME_IN_FORCE_ORDER_TYPES.has(orderType)) {
         return "GTC";
     }
 

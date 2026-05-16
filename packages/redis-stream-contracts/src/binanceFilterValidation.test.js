@@ -82,6 +82,47 @@ test("uses MARKET_LOT_SIZE and average price for market order notional checks", 
     ]);
 });
 
+test("validates MARKET quoteOrderQty as notional without LOT_SIZE checks", () => {
+    const accepted = validateOrderAgainstExchangeFilters({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        orderType: "MARKET",
+        quoteOrderQty: "25",
+    }, BTCUSDT);
+
+    assert.equal(accepted.ok, true);
+
+    const rejected = validateOrderAgainstExchangeFilters({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        orderType: "MARKET",
+        quoteOrderQty: "1",
+    }, BTCUSDT);
+
+    assert.equal(rejected.ok, false);
+    assert.deepEqual(rejected.errors.map((error) => [error.field, error.code]), [
+        ["notional", "MIN_NOTIONAL_MIN"],
+        ["notional", "NOTIONAL_MIN"],
+    ]);
+});
+
+test("rejects quoteOrderQty for non-market orders", () => {
+    const result = validateOrderAgainstExchangeFilters({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        orderType: "LIMIT",
+        quantity: "0.01",
+        quoteOrderQty: "25",
+        price: "65000.25",
+    }, BTCUSDT);
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.errors.map((error) => [error.field, error.code]), [
+        ["quoteOrderQty", "QUOTE_ORDER_QTY_EXCLUSIVE"],
+        ["quoteOrderQty", "QUOTE_ORDER_QTY_UNSUPPORTED"],
+    ]);
+});
+
 test("supports optional max order and max position context", () => {
     const result = validateOrderAgainstExchangeFilters({
         symbol: "BTCUSDT",

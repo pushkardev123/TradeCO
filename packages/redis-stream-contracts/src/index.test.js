@@ -51,6 +51,49 @@ test("builds a valid MARKET order stream entry with decimal strings", () => {
     assert.equal(entry.price, undefined);
 });
 
+test("supports MARKET quoteOrderQty without base quantity", () => {
+    const entry = buildOrderSubmitStreamEntry({
+        ...baseCommand,
+        quantity: undefined,
+        quoteOrderQty: "25.50",
+    });
+
+    assert.equal(entry.orderType, "MARKET");
+    assert.equal(entry.quantity, undefined);
+    assert.equal(entry.quoteOrderQty, "25.50");
+    assert.equal(parseOrderSubmitStreamEntry(entry).quoteOrderQty, "25.50");
+});
+
+test("rejects invalid quoteOrderQty combinations", () => {
+    assert.match(
+        validateOrderSubmitCommand({
+            ...baseCommand,
+            quantity: undefined,
+        }).join("\n"),
+        /quantity or quoteOrderQty is required/,
+    );
+
+    assert.match(
+        validateOrderSubmitCommand({
+            ...baseCommand,
+            quantity: "0.001",
+            quoteOrderQty: "25",
+        }).join("\n"),
+        /mutually exclusive/,
+    );
+
+    assert.match(
+        validateOrderSubmitCommand({
+            ...baseCommand,
+            orderType: "LIMIT",
+            price: "65000.25",
+            timeInForce: "GTC",
+            quoteOrderQty: "25",
+        }).join("\n"),
+        /only supported for MARKET/,
+    );
+});
+
 test("rejects JavaScript numbers for trading decimal fields", () => {
     const errors = validateOrderSubmitCommand({
         ...baseCommand,

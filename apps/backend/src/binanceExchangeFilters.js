@@ -75,6 +75,7 @@ export function createBinanceFilterValidator({
 
 function shouldFetchAveragePrice(orderDraft) {
     const orderType = String(orderDraft?.orderType || orderDraft?.type || "MARKET").toUpperCase();
+    if (orderDraft?.quoteOrderQty && !orderDraft?.quantity) return false;
     return !orderDraft?.price || orderType === "MARKET" || orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT";
 }
 

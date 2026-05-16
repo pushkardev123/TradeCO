@@ -33,6 +33,7 @@ NEXT_PUBLIC_BACKEND_URL=https://tradeco.example.com/api
 NEXT_PUBLIC_API_URL=https://tradeco.example.com/api
 NEXT_PUBLIC_EVENT_SERVICE_URL=https://tradeco.example.com/event
 NEXT_PUBLIC_WS_URL=wss://tradeco.example.com/ws/prices
+NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS=true
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
 BINANCE_API_BASE=https://testnet.binance.vision
@@ -111,6 +112,7 @@ NEXT_PUBLIC_BACKEND_URL=https://tradeco.example.com/api
 NEXT_PUBLIC_API_URL=https://tradeco.example.com/api
 NEXT_PUBLIC_EVENT_SERVICE_URL=https://tradeco.example.com/event
 NEXT_PUBLIC_WS_URL=wss://tradeco.example.com/ws/prices
+NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS=true
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
 ```

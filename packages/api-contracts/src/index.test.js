@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
     API_CONTRACT_VERSION,
+    ADVANCED_ORDER_TYPES,
     BASIC_ORDER_TYPES,
     DEFAULT_REALTIME_CHANNELS,
     OPEN_ORDER_STATUSES,
@@ -18,6 +19,7 @@ import {
 test("exports stable API and realtime contract constants", () => {
     assert.equal(API_CONTRACT_VERSION, "1");
     assert.deepEqual(BASIC_ORDER_TYPES, ["LIMIT", "MARKET", "STOP_LOSS"]);
+    assert.ok(ADVANCED_ORDER_TYPES.includes("TAKE_PROFIT_LIMIT"));
     assert.equal(DEFAULT_REALTIME_CHANNELS.orders, "events:order:status");
     assert.ok(OPEN_ORDER_STATUSES.includes("PARTIALLY_FILLED"));
 });
@@ -48,6 +50,7 @@ test("formats order commands into API-safe decimal and timestamp strings", () =>
 
     assert.equal(dto.orderType, "LIMIT");
     assert.equal(dto.quantity, "0.001");
+    assert.equal(dto.quoteOrderQty, null);
     assert.equal(dto.binanceOrderId, "123");
     assert.equal(dto.timestamp, "2026-05-16T00:00:00.000Z");
     assert.deepEqual(validateOrderDto(dto), []);

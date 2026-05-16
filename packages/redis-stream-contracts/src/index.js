@@ -46,6 +46,7 @@ export const TIME_IN_FORCE = Object.freeze(["GTC", "IOC", "FOK"]);
 const LIMIT_PRICE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT", "LIMIT_MAKER"]);
 const STOP_PRICE_ORDER_TYPES = new Set(["STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"]);
 const TIME_IN_FORCE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"]);
+const QUOTE_ORDER_QTY_ORDER_TYPES = new Set(["MARKET"]);
 const DECIMAL_STRING_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
 export function getOrderStreamConfig(env = process.env) {
@@ -86,7 +87,8 @@ export function validateOrderSubmitCommand(input) {
     const messageType = optionalString(input.messageType) || ORDER_COMMAND_TYPES.submit;
     const side = normalizeToken(input.side);
     const orderType = normalizeToken(input.orderType);
-    const quantity = optionalString(input.quantity);
+    const hasQuantity = input.quantity !== undefined && input.quantity !== null && input.quantity !== "";
+    const hasQuoteOrderQty = input.quoteOrderQty !== undefined && input.quoteOrderQty !== null && input.quoteOrderQty !== "";
     const price = optionalString(input.price);
     const stopPrice = optionalString(input.stopPrice);
     const timeInForce = normalizeToken(input.timeInForce);
@@ -117,7 +119,21 @@ export function validateOrderSubmitCommand(input) {
         errors.push(`orderType must be one of ${ORDER_TYPES.join(", ")}`);
     }
 
-    requireDecimalString(quantity, "quantity", errors);
+    if (QUOTE_ORDER_QTY_ORDER_TYPES.has(orderType)) {
+        if (!hasQuantity && !hasQuoteOrderQty) {
+            errors.push("quantity or quoteOrderQty is required");
+        }
+        if (hasQuantity && hasQuoteOrderQty) {
+            errors.push("quantity and quoteOrderQty are mutually exclusive");
+        }
+        requireOptionalDecimalString(input.quantity, "quantity", errors);
+        requireOptionalDecimalString(input.quoteOrderQty, "quoteOrderQty", errors);
+    } else {
+        requireDecimalString(input.quantity, "quantity", errors);
+        if (hasQuoteOrderQty) {
+            errors.push("quoteOrderQty is only supported for MARKET orders");
+        }
+    }
 
     if (LIMIT_PRICE_ORDER_TYPES.has(orderType)) {
         requireDecimalString(price, "price", errors);
@@ -164,6 +180,7 @@ export function buildOrderSubmitStreamEntry(input) {
         side: command.side,
         orderType: command.orderType,
         quantity: command.quantity,
+        quoteOrderQty: command.quoteOrderQty,
         price: command.price,
         stopPrice: command.stopPrice,
         timeInForce: command.timeInForce,
@@ -422,6 +439,7 @@ function normalizeOrderSubmitCommand(input) {
         side: normalizeToken(input.side),
         orderType: normalizeToken(input.orderType),
         quantity: optionalString(input.quantity),
+        quoteOrderQty: optionalString(input.quoteOrderQty),
         price: optionalString(input.price),
         stopPrice: optionalString(input.stopPrice),
         timeInForce: normalizeToken(input.timeInForce),

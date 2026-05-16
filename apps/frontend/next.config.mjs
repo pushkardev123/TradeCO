@@ -29,6 +29,14 @@ function validateOptionalPositiveInteger(name, errors) {
   }
 }
 
+function validateOptionalBoolean(name, errors) {
+  const value = readEnv(name);
+  if (!value) return;
+  if (!["true", "false"].includes(value.toLowerCase())) {
+    errors.push(`${name} must be true or false`);
+  }
+}
+
 function validateFrontendEnv() {
   const errors = [];
   validateUrl("NEXT_PUBLIC_BACKEND_URL", ["http:", "https:"], errors);
@@ -37,6 +45,7 @@ function validateFrontendEnv() {
   validateUrl("NEXT_PUBLIC_WS_URL", ["ws:", "wss:"], errors);
   validateOptionalPositiveInteger("NEXT_PUBLIC_MARKET_FLUSH_MS", errors);
   validateOptionalPositiveInteger("NEXT_PUBLIC_MAX_SYMBOLS", errors);
+  validateOptionalBoolean("NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS", errors);
 
   if (errors.length > 0) {
     console.error("[frontend] Configuration error:");

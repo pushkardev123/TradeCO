@@ -9,7 +9,7 @@ import {
     CrosshairMode,
     CandlestickSeries,
 } from "lightweight-charts";
-import { BASIC_ORDER_TYPES, DEFAULT_REALTIME_CHANNELS } from "@tradeco/api-contracts";
+import { ADVANCED_ORDER_TYPES, BASIC_ORDER_TYPES, DEFAULT_REALTIME_CHANNELS, TIME_IN_FORCE as TIME_IN_FORCE_OPTIONS } from "@tradeco/api-contracts";
 
 import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
 import { CgProfile } from "react-icons/cg";
@@ -20,6 +20,22 @@ const PRICE_CHANNEL = DEFAULT_REALTIME_CHANNELS.prices;
 const ORDER_STATUS_CHANNEL = DEFAULT_REALTIME_CHANNELS.orders;
 const ACCOUNT_BALANCES_CHANNEL = DEFAULT_REALTIME_CHANNELS.balances;
 const CHARTS_CHANNEL = DEFAULT_REALTIME_CHANNELS.charts;
+const ADVANCED_ORDERS_ENABLED = process.env.NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS !== "false";
+const ORDER_TYPE_TABS = ADVANCED_ORDERS_ENABLED
+    ? Object.freeze([...BASIC_ORDER_TYPES, ...ADVANCED_ORDER_TYPES])
+    : BASIC_ORDER_TYPES;
+const ORDER_TYPE_LABELS = Object.freeze({
+    MARKET: "Market",
+    LIMIT: "Limit",
+    STOP_LOSS: "Stop Market",
+    STOP_LOSS_LIMIT: "Stop Limit",
+    TAKE_PROFIT: "Take Profit",
+    TAKE_PROFIT_LIMIT: "TP Limit",
+    LIMIT_MAKER: "Maker",
+});
+const LIMIT_PRICE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT", "LIMIT_MAKER"]);
+const STOP_PRICE_ORDER_TYPES = new Set(["STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"]);
+const TIME_IN_FORCE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"]);
 
 export default function TradePage() {
     const router = useRouter();
@@ -127,8 +143,11 @@ export default function TradePage() {
     const [side, setSide] = useState("BUY");
     const [orderType, setOrderType] = useState("MARKET");
     const [qty, setQty] = useState("0.01");
+    const [quoteOrderQty, setQuoteOrderQty] = useState("25");
+    const [orderSizingMode, setOrderSizingMode] = useState("BASE");
     const [limitPrice, setLimitPrice] = useState("");
     const [stopPrice, setStopPrice] = useState("");
+    const [timeInForce, setTimeInForce] = useState("GTC");
     const [formErrors, setFormErrors] = useState({}); // { qty?: string, limitPrice?: string, stopPrice?: string, notional?: string, base?: string }
 
     // Exchange symbol filters (LOT_SIZE etc)
@@ -152,6 +171,12 @@ export default function TradePage() {
     ).replace(/\/$/, "");
     const apiBaseUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace(/\/$/, "");
     const pricesWsUrl = wsBaseUrl.endsWith("/prices") ? wsBaseUrl : `${wsBaseUrl}/prices`;
+
+    useEffect(() => {
+        if (orderType !== "MARKET" && orderSizingMode === "QUOTE") {
+            setOrderSizingMode("BASE");
+        }
+    }, [orderType, orderSizingMode]);
 
     useEffect(() => {
         let cancelled = false;
@@ -710,7 +735,7 @@ export default function TradePage() {
         return trimZeros(Number(v).toFixed(d));
     }
 
-    function validateNotional({ qtyNum, info, orderType, priceForNotional }) {
+    function validateNotional({ qtyNum, info, orderType, priceForNotional, notionalOverride }) {
         if (!info) return { ok: true };
 
         const minN = asNumber(info.minNotional);
@@ -724,10 +749,12 @@ export default function TradePage() {
 
         if (!shouldApplyMin && !shouldApplyMax) return { ok: true };
 
-        const p = asNumber(priceForNotional);
-        if (p === null || p <= 0) return { ok: true }; // can't validate w/out a price
-
-        const notional = p * qtyNum;
+        let notional = asNumber(notionalOverride);
+        if (notional === null) {
+            const p = asNumber(priceForNotional);
+            if (p === null || p <= 0) return { ok: true }; // can't validate w/out a price
+            notional = p * qtyNum;
+        }
 
         if (shouldApplyMin && minN !== null && notional < minN) {
             return { ok: false, reason: `Notional too small: ${trimZeros(notional)} < min ${trimZeros(minN)} USDT` };
@@ -778,31 +805,42 @@ export default function TradePage() {
     }
 
     // Build a Zod schema for order form validation
-    function buildOrderSchema({ info, orderType, currentPrice }) {
+    function buildOrderSchema({ info, orderType, currentPrice, orderSizingMode }) {
         // Accept strings from inputs; transform to numbers where needed
         return z
             .object({
                 qty: z
                     .string()
                     .trim()
-                    .min(1, "Quantity is required"),
+                    .optional(),
+                quoteOrderQty: z.string().trim().optional(),
                 limitPrice: z.string().trim().optional(),
                 stopPrice: z.string().trim().optional(),
+                timeInForce: z.string().trim().optional(),
             })
             .superRefine((val, ctx) => {
-                // Quantity
-                const qcheck = validateQty(val.qty, info);
-                if (!qcheck.ok) {
-                    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["qty"], message: qcheck.reason });
-                    return;
-                }
+                const usesQuoteSizing = orderType === "MARKET" && orderSizingMode === "QUOTE";
+                const quoteNum = Number(val.quoteOrderQty);
+                let qtyNum = Number(val.qty);
 
-                const qtyNum = Number(val.qty);
+                if (usesQuoteSizing) {
+                    if (!Number.isFinite(quoteNum) || quoteNum <= 0) {
+                        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["quoteOrderQty"], message: "Enter a valid quote amount" });
+                        return;
+                    }
+                } else {
+                    const qcheck = validateQty(val.qty, info);
+                    if (!qcheck.ok) {
+                        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["qty"], message: qcheck.reason });
+                        return;
+                    }
+                    qtyNum = Number(val.qty);
+                }
 
                 // Order-type specific price validation
                 let priceForNotional = currentPrice;
 
-                if (orderType === "LIMIT") {
+                if (LIMIT_PRICE_ORDER_TYPES.has(orderType)) {
                     const p = Number(val.limitPrice);
                     if (!Number.isFinite(p) || p <= 0) {
                         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["limitPrice"], message: "Enter a valid limit price" });
@@ -811,17 +849,30 @@ export default function TradePage() {
                     priceForNotional = p;
                 }
 
-                if (orderType === "STOP_LOSS") {
+                if (STOP_PRICE_ORDER_TYPES.has(orderType)) {
                     const sp = Number(val.stopPrice);
                     if (!Number.isFinite(sp) || sp <= 0) {
                         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["stopPrice"], message: "Enter a valid stop price" });
                         return;
                     }
-                    priceForNotional = sp;
+                    if (!LIMIT_PRICE_ORDER_TYPES.has(orderType)) {
+                        priceForNotional = sp;
+                    }
+                }
+
+                if (TIME_IN_FORCE_ORDER_TYPES.has(orderType) && !TIME_IN_FORCE_OPTIONS.includes(String(val.timeInForce || "").toUpperCase())) {
+                    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["timeInForce"], message: "Choose a time in force" });
+                    return;
                 }
 
                 // Notional validation (minNotional/maxNotional)
-                const ncheck = validateNotional({ qtyNum, info, orderType, priceForNotional });
+                const ncheck = validateNotional({
+                    qtyNum,
+                    info,
+                    orderType,
+                    priceForNotional,
+                    notionalOverride: usesQuoteSizing ? quoteNum : undefined,
+                });
                 if (!ncheck.ok) {
                     // Show this as a general form error (not tied to one field)
                     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["notional"], message: ncheck.reason });
@@ -1074,29 +1125,33 @@ export default function TradePage() {
         if (isPlacingOrder) return;
         setIsPlacingOrder(true);
 
-        const schema = buildOrderSchema({ info: symbolInfo, orderType, currentPrice: asNumber(currentPrice) });
+        const schema = buildOrderSchema({ info: symbolInfo, orderType, currentPrice: asNumber(currentPrice), orderSizingMode });
         const parsed = schema.safeParse({
             qty,
+            quoteOrderQty,
             limitPrice,
             stopPrice,
+            timeInForce,
         });
 
         if (!parsed.success) {
             const map = zodErrorMap(parsed.error);
             setFormErrors(map);
             // Also show a short message in apiMsg for visibility
-            setApiMsg(map.notional || map.qty || map.limitPrice || map.stopPrice || map.base || "Fix the highlighted fields");
+            setApiMsg(map.notional || map.qty || map.quoteOrderQty || map.limitPrice || map.stopPrice || map.timeInForce || map.base || "Fix the highlighted fields");
             setIsPlacingOrder(false);
             return;
         }
 
-        let qtyNum = Number(parsed.data.qty);
-        let limitPriceNum = orderType === "LIMIT" ? Number(parsed.data.limitPrice) : undefined;
-        let stopPriceNum = orderType === "STOP_LOSS" ? Number(parsed.data.stopPrice) : undefined;
+        const usesQuoteSizing = orderType === "MARKET" && orderSizingMode === "QUOTE";
+        let qtyNum = usesQuoteSizing ? undefined : Number(parsed.data.qty);
+        const quoteOrderQtyValue = usesQuoteSizing ? parsed.data.quoteOrderQty : undefined;
+        let limitPriceNum = LIMIT_PRICE_ORDER_TYPES.has(orderType) ? Number(parsed.data.limitPrice) : undefined;
+        let stopPriceNum = STOP_PRICE_ORDER_TYPES.has(orderType) ? Number(parsed.data.stopPrice) : undefined;
 
         // Snap inputs to exchange filters (stepSize, tickSize)
         if (symbolInfo) {
-            if (symbolInfo.stepSize) {
+            if (qtyNum !== undefined && symbolInfo.stepSize) {
                 const s = roundToStep(qtyNum, symbolInfo.stepSize);
                 if (s !== null) qtyNum = s;
             }
@@ -1123,7 +1178,9 @@ export default function TradePage() {
             open: true,
             title: "Placing order",
             status: "PENDING",
-            message: `${side} ${selectedSymbol} • qty ${qtyNum}`,
+            message: usesQuoteSizing
+                ? `${side} ${selectedSymbol} • quote ${quoteOrderQtyValue} USDT`
+                : `${side} ${selectedSymbol} • qty ${qtyNum}`,
         });
 
         try {
@@ -1132,18 +1189,26 @@ export default function TradePage() {
                 symbol: String(selectedSymbol || "").toUpperCase(),
                 side: String(side || "").toUpperCase(),
                 orderType: String(orderType || "MARKET").toUpperCase(),
-                quantity: qtyNum,
                 meta: {},
             };
 
+            if (usesQuoteSizing) {
+                payload.quoteOrderQty = quoteOrderQtyValue;
+            } else {
+                payload.quantity = qtyNum;
+            }
+
             // Keep fields explicit:
-            // - LIMIT uses `price` (+ timeInForce)
-            // - STOP_LOSS (Stop Market) uses `stopPrice`
-            if (orderType === "LIMIT") {
+            // - LIMIT/stop-limit/maker variants use `price`
+            // - Stop/take-profit variants use `stopPrice`
+            if (LIMIT_PRICE_ORDER_TYPES.has(orderType)) {
                 payload.price = limitPriceNum;
-                payload.timeInForce = "GTC";
-            } else if (orderType === "STOP_LOSS") {
+            }
+            if (STOP_PRICE_ORDER_TYPES.has(orderType)) {
                 payload.stopPrice = stopPriceNum;
+            }
+            if (TIME_IN_FORCE_ORDER_TYPES.has(orderType)) {
+                payload.timeInForce = timeInForce;
             }
 
             const res = await authFetch(`${apiBaseUrl}/orders`, {
@@ -1223,22 +1288,13 @@ export default function TradePage() {
             : "text-amber-500";
     const lastReplayLabel = lastReplayAt ? `Synced ${new Date(lastReplayAt).toLocaleTimeString()}` : "Pending sync";
 
-    const priceLabel =
-        orderType === "MARKET" ? "Price" : orderType === "STOP_LOSS" ? "Stop price" : "Limit price";
-
-    const pricePlaceholder =
-        orderType === "MARKET"
-            ? "Market price"
-            : orderType === "STOP_LOSS"
-                ? "Enter stop price"
-                : "Enter limit price";
-
-    const priceValue =
-        orderType === "MARKET"
-            ? (Number.isFinite(Number(currentPrice)) ? String(currentPrice) : "")
-            : orderType === "STOP_LOSS"
-                ? stopPrice
-                : limitPrice;
+    const requiresLimitPrice = LIMIT_PRICE_ORDER_TYPES.has(orderType);
+    const requiresStopPrice = STOP_PRICE_ORDER_TYPES.has(orderType);
+    const requiresTimeInForce = TIME_IN_FORCE_ORDER_TYPES.has(orderType);
+    const usesQuoteSizing = orderType === "MARKET" && orderSizingMode === "QUOTE";
+    const estimatedTotal = usesQuoteSizing
+        ? quoteOrderQty
+        : `${formatPrice((Number(currentPrice) || 0) * (Number(qty) || 0))}`;
 
     if (!authReady) {
         return (
@@ -1376,10 +1432,7 @@ export default function TradePage() {
                                         BUY
                                     </button>
                                     <button
-                                        onClick={() => {
-                                            setSide("SELL");
-                                            if (orderType === "STOP_LOSS") setOrderType("MARKET");
-                                        }}
+                                        onClick={() => setSide("SELL")}
                                         className={`py-2 text-sm font-semibold rounded-md transition-all ${side === "SELL"
                                             ? (isDark ? "bg-[#111] text-rose-400 shadow-sm ring-1 ring-white/10" : "bg-white text-rose-600 shadow-sm")
                                             : "text-neutral-500 hover:text-neutral-400"}`}
@@ -1389,23 +1442,23 @@ export default function TradePage() {
                                 </div>
 
                                 {/* Order Type Tabs */}
-                                <div className="flex gap-4 border-b border-neutral-200 dark:border-white/5 mb-6 pb-2 overflow-x-auto">
-                                    {BASIC_ORDER_TYPES.map((t) => {
-                                        if (side === "SELL" && t === "STOP_LOSS") return null;
+                                <div className="flex gap-3 border-b border-neutral-200 dark:border-white/5 mb-6 pb-2 overflow-x-auto">
+                                    {ORDER_TYPE_TABS.map((t) => {
                                         const isActive = orderType === t;
                                         return (
                                             <button
                                                 key={t}
                                                 onClick={() => {
                                                     setOrderType(t);
-                                                    if (t !== "LIMIT") setLimitPrice("");
-                                                    if (t !== "STOP_LOSS") setStopPrice("");
+                                                    if (!LIMIT_PRICE_ORDER_TYPES.has(t)) setLimitPrice("");
+                                                    if (!STOP_PRICE_ORDER_TYPES.has(t)) setStopPrice("");
+                                                    if (!TIME_IN_FORCE_ORDER_TYPES.has(t)) setTimeInForce("GTC");
                                                 }}
                                                 className={`text-xs font-medium pb-2 -mb-2.5 border-b-2 transition-colors whitespace-nowrap ${isActive
                                                     ? (isDark ? "text-white border-white" : "text-black border-black")
                                                     : "text-neutral-500 border-transparent hover:text-neutral-300"}`}
                                             >
-                                                {t === "STOP_LOSS" ? "Stop Market" : t[0] + t.slice(1).toLowerCase()}
+                                                {ORDER_TYPE_LABELS[t] || t}
                                             </button>
                                         );
                                     })}
@@ -1413,52 +1466,131 @@ export default function TradePage() {
 
                                 {/* Inputs */}
                                 <div className="space-y-4">
-                                    <div>
-                                        <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
-                                            <span>{priceLabel}</span>
-                                        </div>
-                                        <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${isDark ? "bg-[#09090b] border-white/10 focus-within:border-white/30" : "bg-neutral-50 border-neutral-200 focus-within:border-neutral-400"}`}>
-                                            <input
-                                                className="bg-transparent text-sm w-full outline-none font-mono"
-                                                placeholder={pricePlaceholder}
-                                                disabled={orderType === "MARKET"}
-                                                value={priceValue}
-                                                onChange={(e) => {
-                                                    const v = e.target.value;
-                                                    if (orderType === "STOP_LOSS") {
-                                                        setStopPrice(v);
-                                                        setFormErrors((prev) => ({ ...prev, stopPrice: undefined, notional: undefined }));
-                                                    } else if (orderType === "LIMIT") {
-                                                        setLimitPrice(v);
-                                                        setFormErrors((prev) => ({ ...prev, limitPrice: undefined, notional: undefined }));
-                                                    }
-                                                }}
-                                            />
-                                            <span className="text-xs text-neutral-500 font-medium">USDT</span>
-                                        </div>
-                                        {/* Errors & Helpers */}
-                                        {orderType === "MARKET" && <div className="mt-1.5 text-xs text-neutral-500">Executes at best price.</div>}
-                                        {(formErrors.limitPrice || formErrors.stopPrice || formErrors.notional) && (
-                                            <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.limitPrice || formErrors.stopPrice || formErrors.notional}</div>
-                                        )}
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4">
+                                    {orderType === "MARKET" && (
                                         <div>
-                                            <div className="text-xs mb-1.5 text-neutral-500">Quantity</div>
+                                            <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
+                                                <span>Size by</span>
+                                            </div>
+                                            <div className={`grid grid-cols-2 gap-1 p-1 rounded-lg ${isDark ? "bg-neutral-900" : "bg-neutral-100"}`}>
+                                                {[
+                                                    ["BASE", selectedSymbol.replace("USDT", "")],
+                                                    ["QUOTE", "USDT"],
+                                                ].map(([mode, label]) => (
+                                                    <button
+                                                        key={mode}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setOrderSizingMode(mode);
+                                                            setFormErrors((prev) => ({ ...prev, qty: undefined, quoteOrderQty: undefined, notional: undefined }));
+                                                        }}
+                                                        className={`py-2 text-xs font-semibold rounded-md transition-all ${orderSizingMode === mode
+                                                            ? (isDark ? "bg-[#111] text-white ring-1 ring-white/10" : "bg-white text-black shadow-sm")
+                                                            : "text-neutral-500 hover:text-neutral-400"}`}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {requiresLimitPrice && (
+                                        <div>
+                                            <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
+                                                <span>Limit price</span>
+                                            </div>
                                             <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${isDark ? "bg-[#09090b] border-white/10 focus-within:border-white/30" : "bg-neutral-50 border-neutral-200 focus-within:border-neutral-400"}`}>
                                                 <input
                                                     className="bg-transparent text-sm w-full outline-none font-mono"
-                                                    value={qty}
+                                                    placeholder="Enter limit price"
+                                                    value={limitPrice}
                                                     onChange={(e) => {
-                                                        setQty(e.target.value);
-                                                        setFormErrors((prev) => ({ ...prev, qty: undefined, notional: undefined }));
+                                                        setLimitPrice(e.target.value);
+                                                        setFormErrors((prev) => ({ ...prev, limitPrice: undefined, notional: undefined }));
+                                                    }}
+                                                />
+                                                <span className="text-xs text-neutral-500 font-medium">USDT</span>
+                                            </div>
+                                            {formErrors.limitPrice && (
+                                                <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.limitPrice}</div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {requiresStopPrice && (
+                                        <div>
+                                            <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
+                                                <span>Stop price</span>
+                                            </div>
+                                            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${isDark ? "bg-[#09090b] border-white/10 focus-within:border-white/30" : "bg-neutral-50 border-neutral-200 focus-within:border-neutral-400"}`}>
+                                                <input
+                                                    className="bg-transparent text-sm w-full outline-none font-mono"
+                                                    placeholder="Enter stop trigger"
+                                                    value={stopPrice}
+                                                    onChange={(e) => {
+                                                        setStopPrice(e.target.value);
+                                                        setFormErrors((prev) => ({ ...prev, stopPrice: undefined, notional: undefined }));
+                                                    }}
+                                                />
+                                                <span className="text-xs text-neutral-500 font-medium">USDT</span>
+                                            </div>
+                                            {formErrors.stopPrice && (
+                                                <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.stopPrice}</div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {orderType === "MARKET" && <div className="text-xs text-neutral-500">Executes at best available Testnet price.</div>}
+                                    {formErrors.notional && (
+                                        <div className="text-xs text-rose-500 font-medium">{formErrors.notional}</div>
+                                    )}
+
+                                    {requiresTimeInForce && (
+                                        <div>
+                                            <div className="text-xs mb-1.5 text-neutral-500">Time in force</div>
+                                            <div className={`grid grid-cols-3 gap-1 p-1 rounded-lg ${isDark ? "bg-neutral-900" : "bg-neutral-100"}`}>
+                                                {TIME_IN_FORCE_OPTIONS.map((option) => (
+                                                    <button
+                                                        key={option}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setTimeInForce(option);
+                                                            setFormErrors((prev) => ({ ...prev, timeInForce: undefined }));
+                                                        }}
+                                                        className={`py-2 text-xs font-semibold rounded-md transition-all ${timeInForce === option
+                                                            ? (isDark ? "bg-[#111] text-white ring-1 ring-white/10" : "bg-white text-black shadow-sm")
+                                                            : "text-neutral-500 hover:text-neutral-400"}`}
+                                                    >
+                                                        {option}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            {formErrors.timeInForce && <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.timeInForce}</div>}
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <div className="text-xs mb-1.5 text-neutral-500">{usesQuoteSizing ? "Quote amount" : "Quantity"}</div>
+                                            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${isDark ? "bg-[#09090b] border-white/10 focus-within:border-white/30" : "bg-neutral-50 border-neutral-200 focus-within:border-neutral-400"}`}>
+                                                <input
+                                                    className="bg-transparent text-sm w-full outline-none font-mono"
+                                                    value={usesQuoteSizing ? quoteOrderQty : qty}
+                                                    onChange={(e) => {
+                                                        if (usesQuoteSizing) {
+                                                            setQuoteOrderQty(e.target.value);
+                                                            setFormErrors((prev) => ({ ...prev, quoteOrderQty: undefined, notional: undefined }));
+                                                        } else {
+                                                            setQty(e.target.value);
+                                                            setFormErrors((prev) => ({ ...prev, qty: undefined, notional: undefined }));
+                                                        }
                                                     }}
                                                     placeholder="0.00"
                                                 />
-                                                <span className="text-xs text-neutral-500 font-medium">{selectedSymbol.replace("USDT", "")}</span>
+                                                <span className="text-xs text-neutral-500 font-medium">{usesQuoteSizing ? "USDT" : selectedSymbol.replace("USDT", "")}</span>
                                             </div>
                                             {formErrors.qty && <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.qty}</div>}
+                                            {formErrors.quoteOrderQty && <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.quoteOrderQty}</div>}
                                         </div>
                                         <div>
                                             <div className="text-xs mb-1.5 text-neutral-500">Total</div>
@@ -1467,7 +1599,7 @@ export default function TradePage() {
                                                     className="bg-transparent text-sm w-full outline-none font-mono cursor-default"
                                                     placeholder="0.00"
                                                     disabled
-                                                    value={`${formatPrice(currentPrice * Number(qty) || 0)}`}
+                                                    value={estimatedTotal}
                                                     readOnly
                                                 />
                                                 <span className="text-xs opacity-70 font-medium">USDT</span>

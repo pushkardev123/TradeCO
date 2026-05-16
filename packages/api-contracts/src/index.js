@@ -45,6 +45,7 @@ export const ORDER_TYPES = Object.freeze([
 ]);
 
 export const BASIC_ORDER_TYPES = Object.freeze(["LIMIT", "MARKET", "STOP_LOSS"]);
+export const ADVANCED_ORDER_TYPES = Object.freeze(["STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT", "LIMIT_MAKER"]);
 
 export const TIME_IN_FORCE = Object.freeze(["GTC", "IOC", "FOK"]);
 
@@ -111,6 +112,7 @@ export function formatOrderCommandDto(command, latest = null) {
         side: command.side,
         orderType: command.type || command.orderType,
         quantity: toDecimalBoundaryString(command.quantity),
+        quoteOrderQty: toDecimalBoundaryString(command.quoteOrderQty),
         price: toDecimalBoundaryString(command.price),
         stopPrice: toDecimalBoundaryString(command.stopPrice),
         timeInForce: command.timeInForce || null,
@@ -154,6 +156,7 @@ export function validateOrderDto(order) {
     requireOneOf(order.orderType, ORDER_TYPES, "order.orderType", errors);
     requireOneOf(order.status, ORDER_STATUSES, "order.status", errors);
     requireNullableDecimalString(order.quantity, "order.quantity", errors);
+    requireNullableDecimalString(order.quoteOrderQty, "order.quoteOrderQty", errors);
     requireNullableDecimalString(order.price, "order.price", errors);
     requireNullableDecimalString(order.stopPrice, "order.stopPrice", errors);
     requireNullableDecimalString(order.executedQty, "order.executedQty", errors);

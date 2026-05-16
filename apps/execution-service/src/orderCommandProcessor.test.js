@@ -85,6 +85,7 @@ test("normalizes legacy Pub/Sub command messages", () => {
         side: "BUY",
         orderType: "MARKET",
         quantity: "0.001",
+        quoteOrderQty: undefined,
         price: undefined,
         stopPrice: undefined,
         timeInForce: undefined,
@@ -131,6 +132,44 @@ test("submits order through Binance with clientOrderId and publishes scoped even
     assert.equal(pub.messages[0].channel, "events:order:status");
     assert.equal(pub.messages[0].message.userId, "user_123");
     assert.equal(pub.messages[0].message.status, "SUBMITTED");
+});
+
+test("submits market quoteOrderQty without base quantity", async () => {
+    const prisma = createMemoryPrisma();
+    const pub = createPub();
+    const executed = [];
+
+    const result = await processOrderCommand({
+        command: {
+            orderId: "order_quote_123",
+            userId: "user_123",
+            symbol: "BTCUSDT",
+            side: "BUY",
+            orderType: "MARKET",
+            quoteOrderQty: "25.50",
+        },
+        prisma,
+        pub,
+        eventsChannel: "events:order:status",
+        loadActiveExchangeCredential: async () => ({ apiKey: "api-key", secretKey: "secret-key" }),
+        startUserDataStream: () => {},
+        executeBinanceOrder: async (args) => {
+            executed.push(args);
+            return {
+                orderId: 11111,
+                clientOrderId: args.clientOrderId,
+                status: "NEW",
+                transactTime: Date.parse("2026-05-16T00:00:00.000Z"),
+            };
+        },
+    });
+
+    assert.equal(result.outcome, "submitted");
+    assert.equal(executed[0].quantity, undefined);
+    assert.equal(executed[0].quoteOrderQty, "25.50");
+    assert.equal(prisma.commands.get("order_quote_123").quantity, null);
+    assert.equal(prisma.commands.get("order_quote_123").quoteOrderQty, "25.5");
+    assert.equal(pub.messages[0].message.quantity, null);
 });
 
 test("persists and broadcasts filled market order status from Binance response", async () => {

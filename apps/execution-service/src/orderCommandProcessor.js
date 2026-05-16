@@ -27,10 +27,15 @@ export function normalizeExecutionOrderCommand(input = {}) {
     const symbol = requiredString(input.symbol, "symbol").toUpperCase();
     const side = requiredString(input.side, "side").toUpperCase();
     const orderType = String(input.orderType || input.type || "MARKET").trim().toUpperCase();
-    const quantity = requiredString(input.quantity, "quantity");
+    const quantity = optionalString(input.quantity);
+    const quoteOrderQty = optionalString(input.quoteOrderQty);
     const price = optionalString(input.price);
     const stopPrice = optionalString(input.stopPrice);
     const timeInForce = optionalString(input.timeInForce)?.toUpperCase();
+
+    if (!quantity && !quoteOrderQty) {
+        throw new Error("quantity or quoteOrderQty is required");
+    }
 
     return {
         commandId: optionalString(input.commandId) || orderId,
@@ -40,6 +45,7 @@ export function normalizeExecutionOrderCommand(input = {}) {
         side,
         orderType,
         quantity,
+        quoteOrderQty,
         price,
         stopPrice,
         timeInForce,
@@ -135,7 +141,8 @@ async function processOrderSubmitCommand({
             symbol: normalized.symbol,
             side: normalized.side,
             type: normalized.orderType,
-            quantity: normalized.quantity,
+            quantity: nullableDecimalString(normalized.quantity),
+            quoteOrderQty: nullableDecimalString(normalized.quoteOrderQty),
             price: nullableDecimalString(normalized.price),
             stopPrice: nullableDecimalString(normalized.stopPrice),
             timeInForce: normalized.timeInForce || null,
@@ -201,6 +208,7 @@ async function processOrderSubmitCommand({
             side: normalized.side,
             orderType: normalized.orderType,
             quantity: normalized.quantity,
+            quoteOrderQty: normalized.quoteOrderQty,
             timeInForce: normalized.timeInForce,
             price: normalized.price,
             stopPrice: normalized.stopPrice,
@@ -246,7 +254,8 @@ async function processOrderSubmitCommand({
             symbol: normalized.symbol,
             side: normalized.side,
             type: normalized.orderType,
-            quantity: normalized.quantity,
+            quantity: nullableDecimalString(normalized.quantity),
+            quoteOrderQty: nullableDecimalString(normalized.quoteOrderQty),
             price: nullableDecimalString(normalized.price),
             stopPrice: nullableDecimalString(normalized.stopPrice),
             timeInForce: normalized.timeInForce || null,
@@ -263,7 +272,7 @@ async function processOrderSubmitCommand({
         },
     });
 
-    const eventQuantity = executedQty ?? normalized.quantity;
+    const eventQuantity = executedQty ?? normalized.quantity ?? null;
     await prisma.orderEvent.create({
         data: {
             orderId: normalized.orderId,
@@ -516,7 +525,7 @@ export async function rejectOrder({ prisma, pub, eventsChannel, command, reason 
             userId: command.userId,
             status: "REJECTED",
             price: null,
-            quantity: nullableDecimalString(command.quantity) ?? "0",
+            quantity: nullableDecimalString(command.quantity),
             timestamp: now,
         },
     });
@@ -533,7 +542,8 @@ export async function rejectOrder({ prisma, pub, eventsChannel, command, reason 
             symbol: command.symbol,
             side: command.side,
             type: command.orderType,
-            quantity: nullableDecimalString(command.quantity) ?? "0",
+            quantity: nullableDecimalString(command.quantity),
+            quoteOrderQty: nullableDecimalString(command.quoteOrderQty),
             price: nullableDecimalString(command.price),
             stopPrice: nullableDecimalString(command.stopPrice),
             timeInForce: command.timeInForce || null,
@@ -707,19 +717,20 @@ function commandFromExisting(existing, fallback) {
         symbol: existing.symbol || fallback.symbol,
         side: existing.side || fallback.side,
         orderType: existing.type || fallback.orderType,
-        quantity: nullableDecimalString(existing.quantity) ?? nullableDecimalString(fallback.quantity) ?? "0",
+        quantity: nullableDecimalString(existing.quantity) ?? nullableDecimalString(fallback.quantity),
+        quoteOrderQty: nullableDecimalString(existing.quoteOrderQty) ?? nullableDecimalString(fallback.quoteOrderQty),
     };
 }
 
 function quantityFromExisting(existing, fallback) {
     if (!existing) {
-        return nullableDecimalString(fallback?.quantity) ?? "0";
+        return nullableDecimalString(fallback?.quantity);
     }
 
     const executedQty = nullableDecimalString(existing.executedQty);
     if (isPositiveDecimal(executedQty)) return executedQty;
 
-    return nullableDecimalString(existing.quantity) ?? nullableDecimalString(fallback.quantity) ?? "0";
+    return nullableDecimalString(existing.quantity) ?? nullableDecimalString(fallback.quantity);
 }
 
 async function publishOrderStatusEvent({

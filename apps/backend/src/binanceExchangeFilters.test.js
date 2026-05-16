@@ -104,3 +104,18 @@ test("uses average price for market order notional validation", async () => {
     ]);
     assert.equal(calls.map((url) => url.pathname).includes("/api/v3/avgPrice"), true);
 });
+
+test("validates market quoteOrderQty without fetching average price", async () => {
+    const { calls, fetchImpl } = createMockFetch();
+    const validator = createBinanceFilterValidator({ fetchImpl, baseUrl: "https://testnet.binance.vision" });
+
+    const result = await validator.validateOrderDraft({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        orderType: "MARKET",
+        quoteOrderQty: "25",
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls.map((url) => url.pathname), ["/api/v3/exchangeInfo"]);
+});

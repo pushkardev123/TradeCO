@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
     BinanceApiError,
+    buildOrderRequestParams,
     createBinanceSpotTestnetClient,
     getBinanceResponseMetadata,
 } from "./binanceSpotTestnetClient.js";
@@ -157,6 +158,63 @@ test("constructs signed LIMIT order POST requests without a request body", async
     assert.equal(
         calls[0].url,
         `https://testnet.binance.vision/api/v3/order?${signingQuery}&signature=${hmac(signingQuery)}`,
+    );
+});
+
+test("constructs MARKET quoteOrderQty and advanced order request parameters", () => {
+    assert.deepEqual(
+        buildOrderRequestParams({
+            symbol: "btcusdt",
+            side: "buy",
+            orderType: "market",
+            quoteOrderQty: "25.50",
+            clientOrderId: "order_quote",
+        }),
+        {
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "MARKET",
+            quoteOrderQty: "25.50",
+            newClientOrderId: "order_quote",
+        },
+    );
+
+    assert.deepEqual(
+        buildOrderRequestParams({
+            symbol: "btcusdt",
+            side: "sell",
+            orderType: "STOP_LOSS_LIMIT",
+            quantity: "0.001",
+            price: "64000",
+            stopPrice: "64500",
+        }),
+        {
+            symbol: "BTCUSDT",
+            side: "SELL",
+            type: "STOP_LOSS_LIMIT",
+            quantity: "0.001",
+            price: "64000",
+            stopPrice: "64500",
+            timeInForce: "GTC",
+        },
+    );
+
+    assert.deepEqual(
+        buildOrderRequestParams({
+            symbol: "btcusdt",
+            side: "buy",
+            orderType: "LIMIT_MAKER",
+            quantity: "0.001",
+            price: "64000",
+            timeInForce: "IOC",
+        }),
+        {
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "LIMIT_MAKER",
+            quantity: "0.001",
+            price: "64000",
+        },
     );
 });
 

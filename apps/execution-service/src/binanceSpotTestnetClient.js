@@ -336,6 +336,7 @@ export function buildOrderRequestParams({
     side,
     orderType,
     quantity,
+    quoteOrderQty,
     timeInForce,
     price,
     stopPrice,
@@ -344,16 +345,43 @@ export function buildOrderRequestParams({
     const type = String(orderType || "MARKET").toUpperCase();
     const mappedType = type === "STOP_MARKET" ? "STOP_LOSS" : type;
 
-    if (quantity === undefined || quantity === null) {
-        throw new Error("quantity is required");
+    const hasQuantity = quantity !== undefined && quantity !== null && quantity !== "";
+    const hasQuoteOrderQty = quoteOrderQty !== undefined && quoteOrderQty !== null && quoteOrderQty !== "";
+
+    if (hasQuantity && !isPositiveDecimal(quantity)) {
+        throw new Error("quantity must be a positive decimal");
+    }
+    if (hasQuoteOrderQty && !isPositiveDecimal(quoteOrderQty)) {
+        throw new Error("quoteOrderQty must be a positive decimal");
+    }
+
+    if (mappedType === "MARKET") {
+        if (!hasQuantity && !hasQuoteOrderQty) {
+            throw new Error("MARKET requires quantity or quoteOrderQty");
+        }
+        if (hasQuantity && hasQuoteOrderQty) {
+            throw new Error("quantity and quoteOrderQty are mutually exclusive");
+        }
+    } else {
+        if (!hasQuantity) {
+            throw new Error(`${mappedType} requires quantity`);
+        }
+        if (hasQuoteOrderQty) {
+            throw new Error("quoteOrderQty is only supported for MARKET orders");
+        }
     }
 
     const params = {
         symbol: normalizeSymbol(symbol),
         side: requiredString(side, "side").toUpperCase(),
         type: mappedType,
-        quantity,
     };
+
+    if (hasQuantity) {
+        params.quantity = quantity;
+    } else {
+        params.quoteOrderQty = quoteOrderQty;
+    }
 
     if (clientOrderId) {
         params.newClientOrderId = String(clientOrderId);
@@ -367,11 +395,30 @@ export function buildOrderRequestParams({
         params.timeInForce = String(timeInForce || "GTC").toUpperCase();
     }
 
+    if (mappedType === "LIMIT_MAKER") {
+        if (!isPositiveDecimal(price)) {
+            throw new Error("LIMIT_MAKER requires a valid price");
+        }
+        params.price = price;
+    }
+
     if (mappedType === "STOP_LOSS" || mappedType === "TAKE_PROFIT") {
         if (!isPositiveDecimal(stopPrice)) {
             throw new Error(`${mappedType} requires a valid stopPrice`);
         }
         params.stopPrice = stopPrice;
+    }
+
+    if (mappedType === "STOP_LOSS_LIMIT" || mappedType === "TAKE_PROFIT_LIMIT") {
+        if (!isPositiveDecimal(price)) {
+            throw new Error(`${mappedType} requires a valid price`);
+        }
+        if (!isPositiveDecimal(stopPrice)) {
+            throw new Error(`${mappedType} requires a valid stopPrice`);
+        }
+        params.price = price;
+        params.stopPrice = stopPrice;
+        params.timeInForce = String(timeInForce || "GTC").toUpperCase();
     }
 
     return params;

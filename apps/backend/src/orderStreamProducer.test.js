@@ -70,6 +70,77 @@ test("rejects unsupported decimal notation before stream append", () => {
     );
 });
 
+test("builds MARKET quoteOrderQty draft without base quantity", () => {
+    const draft = createOrderSubmitDraftFromRequest({
+        userId: "auth_user_123",
+        orderId: "order_quote_123",
+        body: {
+            symbol: "BTCUSDT",
+            side: "BUY",
+            orderType: "MARKET",
+            quoteOrderQty: "25.50",
+        },
+    });
+
+    assert.equal(draft.quantity, undefined);
+    assert.equal(draft.quoteOrderQty, "25.50");
+    assert.equal(draft.streamEntry.quantity, undefined);
+    assert.equal(draft.streamEntry.quoteOrderQty, "25.50");
+});
+
+test("rejects quoteOrderQty outside MARKET orders", () => {
+    assert.throws(
+        () => createOrderSubmitDraftFromRequest({
+            userId: "auth_user_123",
+            orderId: "order_quote_bad",
+            body: {
+                symbol: "BTCUSDT",
+                side: "BUY",
+                orderType: "LIMIT",
+                quantity: "0.001",
+                quoteOrderQty: "25",
+                price: "65000.25",
+            },
+        }),
+        /quoteOrderQty is only supported for MARKET orders/,
+    );
+});
+
+test("builds advanced stop-limit and maker order drafts", () => {
+    const stopLimit = createOrderSubmitDraftFromRequest({
+        userId: "auth_user_123",
+        orderId: "order_stop_limit",
+        body: {
+            symbol: "BTCUSDT",
+            side: "SELL",
+            orderType: "STOP_LOSS_LIMIT",
+            quantity: "0.001",
+            price: "64000",
+            stopPrice: "64500",
+        },
+    });
+
+    assert.equal(stopLimit.streamEntry.orderType, "STOP_LOSS_LIMIT");
+    assert.equal(stopLimit.streamEntry.timeInForce, "GTC");
+    assert.equal(stopLimit.streamEntry.price, "64000");
+    assert.equal(stopLimit.streamEntry.stopPrice, "64500");
+
+    const maker = createOrderSubmitDraftFromRequest({
+        userId: "auth_user_123",
+        orderId: "order_maker",
+        body: {
+            symbol: "BTCUSDT",
+            side: "BUY",
+            orderType: "LIMIT_MAKER",
+            quantity: "0.001",
+            price: "64000",
+        },
+    });
+
+    assert.equal(maker.streamEntry.orderType, "LIMIT_MAKER");
+    assert.equal(maker.streamEntry.timeInForce, undefined);
+});
+
 test("appends stream entry with Redis XADD using configured stream name", async () => {
     const calls = [];
     const redis = {

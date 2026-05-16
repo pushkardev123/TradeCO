@@ -65,11 +65,12 @@ model OrderCommand {
   binanceOrderId    Int?                     // Binance order id (i)
   symbol            String
   side              String                  // BUY | SELL
-  type              String                  // MARKET | LIMIT | STOP_LOSS | STOP_LOSS_LIMIT
+  type              String                  // MARKET | LIMIT | STOP_LOSS | STOP_LOSS_LIMIT | TAKE_PROFIT | LIMIT_MAKER
 
   // ---- Order intent (from frontend submit) ----
   
-  quantity           Decimal @db.Decimal(36, 18)
+  quantity           Decimal? @db.Decimal(36, 18)
+  quoteOrderQty      Decimal? @db.Decimal(36, 18) // MARKET quote-sized orders
   price              Decimal? @db.Decimal(36, 18) // LIMIT / STOP_LOSS_LIMIT
   stopPrice          Decimal? @db.Decimal(36, 18) // STOP_LOSS / TAKE_PROFIT
   timeInForce        String?                // GTC / IOC / FOK
