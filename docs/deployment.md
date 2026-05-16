@@ -13,6 +13,7 @@ cp .env.deploy.example .env.deploy
 Required changes before first run:
 
 - `TRADECO_POSTGRES_PASSWORD`: use a strong value.
+- `TRADECO_POSTGRES_USER`: keep this short; PostgreSQL role names must be at most 63 bytes.
 - `JWT_SECRET`: at least 32 characters, shared by backend and event service.
 - `ENCRYPTION_KEY`: exactly 32 characters, shared by backend and execution service.
 - For a domain behind nginx, update `PUBLIC_APP_ORIGIN`, `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_EVENT_SERVICE_URL`, and `NEXT_PUBLIC_WS_URL`.
@@ -48,6 +49,8 @@ REDIS_URL=redis://<host>:6379
 
 Set `DATABASE_URL` directly if your database password contains URL-reserved characters; URL-encode the password value before putting it in the connection string.
 
+When using the bundled Compose Postgres service, prefer leaving `DATABASE_URL` unset so Compose derives it from `TRADECO_POSTGRES_USER`, `TRADECO_POSTGRES_PASSWORD`, and `TRADECO_POSTGRES_DB`. If you do set `DATABASE_URL` with host `postgres`, keep those values exactly in sync.
+
 Keep all Binance user API keys out of `.env.deploy`; users provide their own Testnet keys during signup/onboarding.
 
 Start everything:
@@ -74,6 +77,12 @@ Validate the rendered compose file:
 
 ```sh
 npm run deploy:compose:config
+```
+
+Run the deploy env preflight without rendering Compose:
+
+```sh
+npm run deploy:compose:check-env
 ```
 
 ## Local direct-port URLs
