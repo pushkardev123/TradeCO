@@ -1,7 +1,12 @@
 import WebSocket from "ws";
+import http from "node:http";
 import { createClient } from "redis";
 import { PrismaClient } from "@prisma/client";
 import crypto from "crypto";
+import {
+    createLogger,
+    safeError as toSafeError,
+} from "@tradeco/observability";
 import { config, logStartupConfig, safeErrorMessage } from "./config.js";
 import { createBinanceSpotTestnetClient } from "./binanceSpotTestnetClient.js";
 import {
@@ -64,6 +69,8 @@ const RECONCILIATION_BATCH_SIZE = config.reconciliationBatchSize;
 const SYMBOL_REQ_CHANNEL = config.symbolReqChannel;
 const SYMBOL_RES_CHANNEL = config.symbolResChannel;
 const SYMBOL_CACHE_MS = config.symbolCacheMs;
+const HEALTH_PORT = config.healthPort;
+const logger = createLogger({ service: "execution-service" });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -123,6 +130,14 @@ const userStreams = new Map(); // userId -> { ws, subscriptionId, placeholder: b
 // Kline stream registry: key = `${symbol}|${interval}` -> { ws, lastKline, refCount, createdAt }
 const klineStreams = new Map();
 const marketDetailStreams = new Map(); // symbol -> { ws, refCount, createdAt }
+const runtimeHealth = {
+    startedAt: Date.now(),
+    redisReady: false,
+    lastOrderStreamMessageAt: null,
+    lastOrderStreamOutcome: null,
+    marketStreamConnected: false,
+    lastMarketStreamEventAt: null,
+};
 
 function klineKey(symbol, interval) {
     return `${String(symbol || "").toUpperCase()}|${String(interval || "").toLowerCase()}`;
@@ -254,7 +269,7 @@ function startKlineStream({ pub, symbol, interval }) {
     }
 
     const wsUrl = buildKlineWsUrl(sym, iv);
-    console.log("[execution] kline stream connecting:", { key, wsUrl });
+    logger.info("kline_stream.connecting", { key, wsUrl });
 
     const ws = new WebSocket(wsUrl);
 
@@ -268,15 +283,15 @@ function startKlineStream({ pub, symbol, interval }) {
     klineStreams.set(key, entry);
 
     ws.on("open", () => {
-        console.log("[execution] kline stream connected", { key });
+        logger.info("kline_stream.connected", { key });
     });
 
     ws.on("error", (err) => {
-        console.error("[execution] kline stream error", { key, err: err?.message || err });
+        logger.error("kline_stream.error", { key, error: toSafeError(err) });
     });
 
     ws.on("close", (code, reason) => {
-        console.warn("[execution] kline stream closed", { key, code, reason: String(reason || "") });
+        logger.warn("kline_stream.closed", { key, code, reason: String(reason || "") });
         klineStreams.delete(key);
     });
 
@@ -298,7 +313,7 @@ function startKlineStream({ pub, symbol, interval }) {
         try {
             await pub.publish(CHARTS_CHANNEL, JSON.stringify(out));
         } catch (e) {
-            console.warn("[execution] failed to publish kline update", e?.message || e);
+            logger.warn("kline_stream.publish_failed", { key, error: toSafeError(e) });
         }
     });
 }
@@ -349,21 +364,21 @@ async function publishMarketDetailSnapshot({ pub, symbol }) {
 function openMarketDetailWebSocket({ pub, symbol, entry }) {
     const sym = String(symbol || "").toUpperCase();
     const wsUrl = buildMarketDetailWsUrl(sym);
-    console.log("[execution] market detail stream connecting:", { symbol: sym, wsUrl });
+    logger.info("market_detail_stream.connecting", { symbol: sym, wsUrl });
 
     const ws = new WebSocket(wsUrl);
     entry.ws = ws;
 
     ws.on("open", () => {
-        console.log("[execution] market detail stream connected", { symbol: sym });
+        logger.info("market_detail_stream.connected", { symbol: sym });
     });
 
     ws.on("error", (err) => {
-        console.error("[execution] market detail stream error", { symbol: sym, err: err?.message || err });
+        logger.error("market_detail_stream.error", { symbol: sym, error: toSafeError(err) });
     });
 
     ws.on("close", (code, reason) => {
-        console.warn("[execution] market detail stream closed", { symbol: sym, code, reason: String(reason || "") });
+        logger.warn("market_detail_stream.closed", { symbol: sym, code, reason: String(reason || "") });
         if (entry.closedByRequest || entry.refCount <= 0 || marketDetailStreams.get(sym) !== entry) {
             marketDetailStreams.delete(sym);
             return;
@@ -383,7 +398,7 @@ function openMarketDetailWebSocket({ pub, symbol, entry }) {
         try {
             await pub.publish(MARKET_DETAIL_CHANNEL, JSON.stringify(event));
         } catch (e) {
-            console.warn("[execution] failed to publish market detail update", e?.message || e);
+            logger.warn("market_detail_stream.publish_failed", { symbol: sym, error: toSafeError(e) });
         }
     });
 }
@@ -428,6 +443,46 @@ function stopMarketDetailStream({ symbol }) {
     } catch { }
 
     marketDetailStreams.delete(sym);
+}
+
+function startHealthServer({ redis }) {
+    const server = http.createServer((req, res) => {
+        if (req.method !== "GET" || req.url !== "/health") {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ ok: false, error: "not found" }));
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({
+            ok: true,
+            service: "execution-service",
+            redis: {
+                ready: Boolean(redis?.isReady),
+                open: Boolean(redis?.isOpen),
+            },
+            streams: {
+                orderCommandStream: ORDER_COMMAND_STREAM,
+                orderCommandConsumerGroup: ORDER_COMMAND_CONSUMER_GROUP,
+                activeKlineStreams: klineStreams.size,
+                activeMarketDetailStreams: marketDetailStreams.size,
+                activeUserStreams: userStreams.size,
+            },
+            runtime: {
+                uptimeSec: Math.round(process.uptime()),
+                startedAt: new Date(runtimeHealth.startedAt).toISOString(),
+                marketStreamConnected: runtimeHealth.marketStreamConnected,
+                lastMarketStreamEventAt: runtimeHealth.lastMarketStreamEventAt,
+                lastOrderStreamMessageAt: runtimeHealth.lastOrderStreamMessageAt,
+                lastOrderStreamOutcome: runtimeHealth.lastOrderStreamOutcome,
+            },
+        }));
+    });
+
+    server.listen(HEALTH_PORT, () => {
+        logger.info("health.listening", { port: HEALTH_PORT });
+    });
+
+    return server;
 }
 
 // Very short-lived cache to avoid hammering /api/v3/account
@@ -475,7 +530,7 @@ async function applyFillToPositions({ prisma, userId, symbol, side, fillQty, fil
             where: { userId_symbol: { userId, symbol: sym } },
         });
     } catch (e) {
-        console.warn("[execution] positions table not wired (prisma.position missing?)", e?.message || e);
+        logger.warn("positions.table_unavailable", { error: toSafeError(e) });
         return;
     }
 
@@ -523,7 +578,7 @@ function startUserDataStream({ prisma, pub, userId, apiKey, secretKey }) {
     userStreams.set(uid, { placeholder: true });
 
     (async () => {
-        console.log("[execution] user data stream connecting:", { userId: uid, wsUrl: BINANCE_WS_API_BASE });
+        logger.info("user_stream.connecting", { userId: uid, wsUrl: BINANCE_WS_API_BASE });
 
         const ws = new WebSocket(BINANCE_WS_API_BASE);
         const entry = {
@@ -541,16 +596,16 @@ function startUserDataStream({ prisma, pub, userId, apiKey, secretKey }) {
                 const request = buildUserDataStreamSubscribeRequest({ apiKey, secretKey });
                 entry.subscribeRequestId = request.id;
                 ws.send(JSON.stringify(request));
-                console.log("[execution] user data stream subscription requested", { userId: uid });
+                logger.info("user_stream.subscription_requested", { userId: uid });
             } catch (e) {
                 entry.shouldReconnect = false;
-                console.error("[execution] user data stream subscription request failed", { userId: uid, err: e?.message || e });
+                logger.error("user_stream.subscription_request_failed", { userId: uid, error: toSafeError(e) });
                 try { ws.close(); } catch { }
             }
         });
 
         ws.on("close", (code, reason) => {
-            console.warn("[execution] user data stream closed", { userId: uid, code, reason: String(reason || "") });
+            logger.warn("user_stream.closed", { userId: uid, code, reason: String(reason || "") });
             const current = userStreams.get(uid);
             if (current === entry) {
                 userStreams.delete(uid);
@@ -563,7 +618,7 @@ function startUserDataStream({ prisma, pub, userId, apiKey, secretKey }) {
         });
 
         ws.on("error", (err) => {
-            console.error("[execution] user data stream error", { userId: uid, err: err?.message || err });
+            logger.error("user_stream.error", { userId: uid, error: toSafeError(err) });
         });
 
         ws.on("message", async (raw) => {
@@ -575,13 +630,13 @@ function startUserDataStream({ prisma, pub, userId, apiKey, secretKey }) {
             if (parsed.kind === "response") {
                 if (isUserDataStreamSubscribeAck(parsed, entry.subscribeRequestId)) {
                     entry.subscriptionId = getUserDataStreamSubscriptionId(parsed);
-                    console.log("[execution] user data stream subscribed", { userId: uid, subscriptionId: entry.subscriptionId });
+                    logger.info("user_stream.subscribed", { userId: uid, subscriptionId: entry.subscriptionId });
                     return;
                 }
 
                 if (parsed.raw?.id === entry.subscribeRequestId && Number(parsed.raw?.status) >= 400) {
                     entry.shouldReconnect = false;
-                    console.warn("[execution] user data stream subscription rejected", {
+                    logger.warn("user_stream.subscription_rejected", {
                         userId: uid,
                         status: parsed.raw?.status,
                         error: parsed.raw?.error?.msg || parsed.raw?.error?.message || "subscription failed",
@@ -638,7 +693,7 @@ function startUserDataStream({ prisma, pub, userId, apiKey, secretKey }) {
                             },
                         });
                     } catch (e) {
-                        console.warn("[execution] orderEvent create failed (user stream):", e?.message || e);
+                        logger.warn("user_stream.order_event_create_failed", { userId: uid, orderId: internalOrderId, error: toSafeError(e) });
                     }
 
                     try {
@@ -668,7 +723,7 @@ function startUserDataStream({ prisma, pub, userId, apiKey, secretKey }) {
                             },
                         });
                     } catch (e) {
-                        console.warn("[execution] orderCommand upsert failed (user stream):", e?.message || e);
+                        logger.warn("user_stream.order_command_upsert_failed", { userId: uid, orderId: internalOrderId, error: toSafeError(e) });
                     }
 
                     if (isPositiveDecimal(lastQty) && isPositiveDecimal(lastPrice)) {
@@ -845,9 +900,9 @@ async function main() {
     const pub = createClient({ url: REDIS_URL });
     const stream = createClient({ url: REDIS_URL });
 
-    sub.on("error", (e) => console.error("[execution] redis sub error:", safeErrorMessage(e)));
-    pub.on("error", (e) => console.error("[execution] redis pub error:", safeErrorMessage(e)));
-    stream.on("error", (e) => console.error("[execution] redis stream error:", safeErrorMessage(e)));
+    sub.on("error", (e) => logger.error("redis.subscriber.error", { error: toSafeError(e) }));
+    pub.on("error", (e) => logger.error("redis.publisher.error", { error: toSafeError(e) }));
+    stream.on("error", (e) => logger.error("redis.stream.error", { error: toSafeError(e) }));
 
     const prisma = new PrismaClient();
 
@@ -855,18 +910,27 @@ async function main() {
     await sub.connect();
     await pub.connect();
     await stream.connect();
+    runtimeHealth.redisReady = true;
+    const healthServer = startHealthServer({ redis: stream });
 
-    console.log("[execution] redis connected");
-    console.log(`[execution] consuming stream: ${ORDER_COMMAND_STREAM} group=${ORDER_COMMAND_CONSUMER_GROUP} consumer=${ORDER_COMMAND_CONSUMER_NAME}`);
+    logger.info("redis.connected", {
+        subscriberReady: Boolean(sub.isReady),
+        publisherReady: Boolean(pub.isReady),
+        streamReady: Boolean(stream.isReady),
+    });
+    logger.info("order_stream.consumer_starting", {
+        streamName: ORDER_COMMAND_STREAM,
+        groupName: ORDER_COMMAND_CONSUMER_GROUP,
+        consumerName: ORDER_COMMAND_CONSUMER_NAME,
+    });
     if (LEGACY_COMMANDS_CHANNEL_ENABLED) {
-        console.log(`[execution] subscribing legacy commands fallback: ${COMMANDS_CHANNEL}`);
+        logger.warn("legacy_commands.enabled", { channel: COMMANDS_CHANNEL });
     } else {
-        console.log(`[execution] legacy commands fallback disabled: ${COMMANDS_CHANNEL}`);
+        logger.info("legacy_commands.disabled", { channel: COMMANDS_CHANNEL });
     }
-    console.log(`[execution] subscribing: ${SYMBOL_REQ_CHANNEL}`);
-    console.log(`[execution] subscribing: ${ACCOUNT_REQ_CHANNEL}`);
-    console.log(`[execution] subscribing: ${CHART_REQ_CHANNEL}`);
-    console.log(`[execution] subscribing: ${MARKET_REQ_CHANNEL}`);
+    logger.info("redis.subscriptions.starting", {
+        channels: [SYMBOL_REQ_CHANNEL, ACCOUNT_REQ_CHANNEL, CHART_REQ_CHANNEL, MARKET_REQ_CHANNEL],
+    });
 
     await sub.subscribe(CHART_REQ_CHANNEL, async (message) => {
         let req;
@@ -893,7 +957,7 @@ async function main() {
             };
             await pub.publish(CHARTS_CHANNEL, JSON.stringify(snapshotEvent));
         } catch (e) {
-            console.warn("[execution] failed to fetch/publish kline snapshot", { symbol, interval, err: e?.message || e });
+            logger.warn("chart.snapshot_publish_failed", { symbol, interval, error: toSafeError(e) });
         }
         startKlineStream({ pub, symbol, interval });
     });
@@ -915,7 +979,7 @@ async function main() {
         try {
             await publishMarketDetailSnapshot({ pub, symbol });
         } catch (e) {
-            console.warn("[execution] failed to fetch/publish market detail snapshot", { symbol, err: e?.message || e });
+            logger.warn("market_detail.snapshot_publish_failed", { symbol, error: toSafeError(e) });
         }
 
         startMarketDetailStream({ pub, symbol });
@@ -1002,17 +1066,22 @@ async function main() {
     const startBinanceWs = () => {
         if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
         binanceSocket = new WebSocket(wsUrl);
-        binanceSocket.on("open", () => console.log("[execution] market stream connected"));
+        binanceSocket.on("open", () => {
+            runtimeHealth.marketStreamConnected = true;
+            logger.info("market_stream.connected", { mode: MARKET_MODE });
+        });
         binanceSocket.on("error", (err) => {
-            console.error("[execution] market stream error", { err: err?.message || err });
+            logger.error("market_stream.error", { error: toSafeError(err) });
         });
         binanceSocket.on("close", (code, reason) => {
-            console.warn("[execution] market stream closed", { code, reason: String(reason || "") });
+            runtimeHealth.marketStreamConnected = false;
+            logger.warn("market_stream.closed", { code, reason: String(reason || "") });
             wsReconnectTimer = setTimeout(startBinanceWs, 1500);
         });
         binanceSocket.on("message", async (raw) => {
             try {
                 const parsed = JSON.parse(raw.toString());
+                runtimeHealth.lastMarketStreamEventAt = new Date().toISOString();
                 if (MARKET_MODE === "all") {
                     if (!Array.isArray(parsed)) return;
                     const tickers = parsed.map((t) => ({ symbol: String(t.s || "").toUpperCase(), price: Number(t.c) })).filter((t) => t.symbol && Number.isFinite(t.price));
@@ -1027,18 +1096,34 @@ async function main() {
     };
     startBinanceWs();
 
-    const processCommand = (command) => processOrderCommand({
-        command,
-        prisma,
-        pub,
-        eventsChannel: EVENTS_CHANNEL,
-        loadActiveExchangeCredential,
-        validateOrderBeforeSubmit,
-        startUserDataStream,
-        executeBinanceOrder,
-        executeBinanceCancelOrder,
-        executeBinanceCancelAllOrders,
-    });
+    const processCommand = async (command) => {
+        const result = await processOrderCommand({
+            command,
+            prisma,
+            pub,
+            eventsChannel: EVENTS_CHANNEL,
+            loadActiveExchangeCredential,
+            validateOrderBeforeSubmit,
+            startUserDataStream,
+            executeBinanceOrder,
+            executeBinanceCancelOrder,
+            executeBinanceCancelAllOrders,
+        });
+
+        runtimeHealth.lastOrderStreamMessageAt = new Date().toISOString();
+        runtimeHealth.lastOrderStreamOutcome = result?.outcome || null;
+        logger.info("order.lifecycle.processed", {
+            requestId: command.requestId,
+            commandId: command.commandId,
+            orderId: command.orderId,
+            userId: command.userId,
+            symbol: command.symbol,
+            messageType: command.messageType,
+            outcome: result?.outcome,
+            reason: result?.reason,
+        });
+        return result;
+    };
 
     const streamConsumer = startOrderStreamConsumer({
         redis: stream,
@@ -1051,6 +1136,7 @@ async function main() {
         maxAttempts: ORDER_COMMAND_MAX_ATTEMPTS,
         processCommand,
         safeErrorMessage,
+        logger,
     });
 
     const reconciliationWorker = startReconciliationWorker({
@@ -1066,7 +1152,7 @@ async function main() {
         fetchOrder: fetchBinanceOrder,
         fetchMyTrades: fetchBinanceMyTrades,
         fetchAccount: fetchBinanceAccount,
-        logger: console,
+        logger,
     });
 
     if (LEGACY_COMMANDS_CHANNEL_ENABLED) {
@@ -1075,14 +1161,14 @@ async function main() {
             try {
                 command = parseLegacyOrderCommandMessage(message);
             } catch (error) {
-                console.warn("[execution] ignored invalid legacy order command:", safeErrorMessage(error));
+                logger.warn("legacy_command.ignored", { error: toSafeError(error) });
                 return;
             }
 
             try {
                 await processCommand(command);
             } catch (error) {
-                console.error("[execution] legacy order command failed:", safeErrorMessage(error));
+                logger.error("legacy_command.failed", { error: toSafeError(error) });
             }
         });
     }
@@ -1094,6 +1180,7 @@ async function main() {
         }
         streamConsumer.stop();
         reconciliationWorker.stop();
+        try { healthServer.close(); } catch { }
         try { await sub.quit(); await pub.quit(); await stream.quit(); await prisma.$disconnect(); } catch { }
         process.exit(0);
     };
@@ -1101,4 +1188,7 @@ async function main() {
     process.on("SIGTERM", shutdown);
 }
 
-main().catch((e) => { console.error("[execution] fatal:", safeErrorMessage(e)); process.exit(1); });
+main().catch((e) => {
+    logger.error("service.fatal", { error: toSafeError(e) });
+    process.exit(1);
+});

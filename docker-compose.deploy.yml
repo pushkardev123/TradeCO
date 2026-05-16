@@ -130,8 +130,11 @@ services:
       RECONCILIATION_STALE_MS: ${RECONCILIATION_STALE_MS:-30000}
       RECONCILIATION_BATCH_SIZE: ${RECONCILIATION_BATCH_SIZE:-100}
       DEFAULT_KLINE_INTERVAL: ${DEFAULT_KLINE_INTERVAL:-1m}
+      HEALTH_PORT: ${HEALTH_PORT:-8082}
       MARKET_MODE: ${MARKET_MODE:-all}
       SYMBOLS: ${SYMBOLS:-btcusdt}
+    ports:
+      - "${EXECUTION_HEALTH_PORT:-8082}:8082"
     depends_on:
       postgres:
         condition: service_healthy

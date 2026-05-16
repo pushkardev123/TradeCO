@@ -32,12 +32,13 @@ export function normalizeExecutionOrderCommand(input = {}) {
     const price = optionalString(input.price);
     const stopPrice = optionalString(input.stopPrice);
     const timeInForce = optionalString(input.timeInForce)?.toUpperCase();
+    const requestId = optionalString(input.requestId);
 
     if (!quantity && !quoteOrderQty) {
         throw new Error("quantity or quoteOrderQty is required");
     }
 
-    return {
+    return omitUndefinedFields({
         commandId: optionalString(input.commandId) || orderId,
         orderId,
         userId,
@@ -49,7 +50,8 @@ export function normalizeExecutionOrderCommand(input = {}) {
         price,
         stopPrice,
         timeInForce,
-    };
+        requestId,
+    });
 }
 
 export function normalizeExecutionCancelCommand(input = {}) {
@@ -57,13 +59,14 @@ export function normalizeExecutionCancelCommand(input = {}) {
     const userId = requiredString(input.userId, "userId");
     const symbol = requiredString(input.symbol, "symbol").toUpperCase();
 
-    return {
+    return omitUndefinedFields({
         commandId: optionalString(input.commandId) || orderId,
         messageType: ORDER_COMMAND_TYPES.cancel,
         orderId,
         userId,
         symbol,
-    };
+        requestId: optionalString(input.requestId),
+    });
 }
 
 export function normalizeExecutionCancelAllCommand(input = {}) {
@@ -71,12 +74,13 @@ export function normalizeExecutionCancelAllCommand(input = {}) {
     const userId = requiredString(input.userId, "userId");
     const symbol = requiredString(input.symbol, "symbol").toUpperCase();
 
-    return {
+    return omitUndefinedFields({
         commandId,
         messageType: ORDER_COMMAND_TYPES.cancelAll,
         userId,
         symbol,
-    };
+        requestId: optionalString(input.requestId),
+    });
 }
 
 export function parseLegacyOrderCommandMessage(message) {

@@ -1,8 +1,16 @@
 import http from "http";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import { createClient } from "redis";
+import {
+    createLogger,
+    createRequestContext,
+    durationMs,
+    safeError as toSafeError,
+    setTraceHeaders,
+} from "@tradeco/observability";
 import { getRealtimeChannelConfig } from "@tradeco/redis-stream-contracts";
-import { config, getCorsAllowOrigin, logStartupConfig, redactUrl, safeErrorMessage } from "./config.js";
+import { config, getCorsAllowOrigin, logStartupConfig, redactUrl } from "./config.js";
 import {
     canReceiveBroadcast,
     getBearerToken,
@@ -18,6 +26,7 @@ import {
 
 const PORT = config.port;
 const REDIS_URL = config.redisUrl;
+const BINANCE_API_BASE = config.binanceApiBase;
 const EVENTS_CHANNEL = config.eventsChannel;
 const ORDERS_CHANNEL = config.ordersChannel;
 const PRICES_CHANNEL = config.pricesChannel;
@@ -41,6 +50,7 @@ const SYMBOL_REQ_CHANNEL = config.symbolReqChannel;
 const SYMBOL_RES_CHANNEL = config.symbolResChannel;
 const SYMBOL_CACHE_MS = config.symbolCacheMs;
 const REALTIME_CHANNELS = getRealtimeChannelConfig(process.env);
+const logger = createLogger({ service: "event-service" });
 
 let redisPub = null;
 
@@ -156,6 +166,14 @@ function sendJson(res, status, body) {
     return res.end(JSON.stringify(body));
 }
 
+function requestLogContext(req, fields = {}) {
+    return {
+        requestId: req.requestId,
+        traceId: req.traceId,
+        ...fields,
+    };
+}
+
 function rejectUserIdParam(url, user, res) {
     const supplied = getUserIdParam(url);
     if (supplied === null) return false;
@@ -195,6 +213,9 @@ function setCors(req, res) {
     if (allowOrigin) {
         res.setHeader("Access-Control-Allow-Origin", allowOrigin);
         res.setHeader("Vary", "Origin");
+        if (allowOrigin !== "*") {
+            res.setHeader("Access-Control-Allow-Credentials", "true");
+        }
     }
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -223,8 +244,85 @@ function readJson(req) {
     });
 }
 
+function normalizeChartSymbol(value) {
+    const symbol = String(value || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{2,20}$/.test(symbol)) return "";
+    return symbol;
+}
+
+function normalizeChartInterval(value) {
+    const interval = String(value || "1m").trim().toLowerCase();
+    const allowed = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]);
+    return allowed.has(interval) ? interval : "";
+}
+
+function normalizeChartLimit(value) {
+    const limit = Number(value);
+    if (!Number.isInteger(limit)) return 500;
+    return Math.max(1, Math.min(limit, 1000));
+}
+
+async function fetchKlineSnapshot({ symbol, interval, limit }) {
+    const url = new URL("/api/v3/klines", BINANCE_API_BASE);
+    url.searchParams.set("symbol", symbol);
+    url.searchParams.set("interval", interval);
+    url.searchParams.set("limit", String(limit));
+
+    const response = await fetch(url, { method: "GET" });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+        const message = data?.msg || data?.message || `Binance klines failed (${response.status})`;
+        throw new Error(message);
+    }
+    if (!Array.isArray(data)) {
+        throw new Error("Binance klines response was not an array");
+    }
+
+    const candles = data.map((kline) => {
+        const startTime = Number(kline?.[0]);
+        const open = Number(kline?.[1]);
+        const high = Number(kline?.[2]);
+        const low = Number(kline?.[3]);
+        const close = Number(kline?.[4]);
+        const volume = Number(kline?.[5]);
+        const closeTime = Number(kline?.[6]);
+
+        if (![startTime, closeTime, open, high, low, close].every(Number.isFinite)) return null;
+        return {
+            time: Math.floor(startTime / 1000),
+            open,
+            high,
+            low,
+            close,
+            volume: Number.isFinite(volume) ? volume : 0,
+            startTime,
+            closeTime,
+        };
+    }).filter(Boolean);
+
+    return { symbol, interval, candles };
+}
+
 // --- HTTP server (health + REST endpoints + WS upgrade) ---
 const server = http.createServer(async (req, res) => {
+    const context = createRequestContext(req.headers);
+    req.requestId = context.requestId;
+    req.traceId = context.traceId;
+    setTraceHeaders(res, context);
+
+    const startedAt = Date.now();
+    res.on("finish", () => {
+        const path = String(req.url || "").split("?")[0] || "/";
+        logger.info("http.request", {
+            requestId: req.requestId,
+            traceId: req.traceId,
+            method: req.method,
+            path,
+            statusCode: res.statusCode,
+            durationMs: durationMs(startedAt),
+        });
+    });
+
     setCors(req, res);
 
     // Preflight
@@ -239,6 +337,7 @@ const server = http.createServer(async (req, res) => {
             JSON.stringify({
                 ok: true,
                 service: "event-service",
+                requestId: req.requestId,
                 redisUrl: redactUrl(REDIS_URL),
                 eventsChannel: EVENTS_CHANNEL,
                 ordersChannel: ORDERS_CHANNEL,
@@ -255,6 +354,16 @@ const server = http.createServer(async (req, res) => {
                 symbolResChannel: SYMBOL_RES_CHANNEL,
                 symbolCacheMs: SYMBOL_CACHE_MS,
                 hasPublisher: Boolean(redisPub),
+                redis: {
+                    publisherReady: Boolean(redisPub?.isReady),
+                },
+                websocketClients: clients.size,
+                pendingRequests: pending.size,
+                cache: {
+                    accountEntries: accountCache.size,
+                    symbolEntries: symbolCache.size,
+                },
+                uptimeSec: Math.round(process.uptime()),
             })
         );
         return;
@@ -278,7 +387,7 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: true, fromCache: out.fromCache, data: out.data }));
         } catch (e) {
-            console.error("[event-service] /account-info error:", e);
+            logger.error("account_info.error", requestLogContext(req, { error: toSafeError(e) }));
             res.writeHead(504, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: false, error: e?.message || "timeout" }));
         }
@@ -304,9 +413,40 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: true, symbol, fromCache: out.fromCache, data: out.data }));
         } catch (e) {
-            console.error("[event-service] /symbol-info error:", e);
+            logger.error("symbol_info.error", requestLogContext(req, { error: toSafeError(e) }));
             res.writeHead(504, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: false, error: e?.message || "timeout" }));
+        }
+    }
+
+    if (req.url?.startsWith("/charts/snapshot") && req.method === "GET") {
+        try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = normalizeChartSymbol(u.searchParams.get("symbol") || "BTCUSDT");
+            const interval = normalizeChartInterval(u.searchParams.get("interval") || "1m");
+            const limit = normalizeChartLimit(u.searchParams.get("limit") || "500");
+
+            if (!symbol) {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                return res.end(JSON.stringify({ ok: false, error: "invalid symbol" }));
+            }
+            if (!interval) {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                return res.end(JSON.stringify({ ok: false, error: "invalid interval" }));
+            }
+
+            const snapshot = await fetchKlineSnapshot({ symbol, interval, limit });
+            res.writeHead(200, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({
+                ok: true,
+                ...snapshot,
+                source: "REST",
+                ts: Date.now(),
+            }));
+        } catch (e) {
+            logger.error("chart.snapshot.error", requestLogContext(req, { error: toSafeError(e) }));
+            res.writeHead(502, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ ok: false, error: e?.message || "chart snapshot failed" }));
         }
     }
 
@@ -331,11 +471,17 @@ const server = http.createServer(async (req, res) => {
             const msg = { type: "CHART_SUBSCRIBE", id, symbol, interval, ts: Date.now() };
 
             await redisPub.publish(CHART_REQ_CHANNEL, JSON.stringify(msg));
+            logger.info("chart.subscribe.published", requestLogContext(req, {
+                id,
+                symbol,
+                interval,
+                channel: CHART_REQ_CHANNEL,
+            }));
 
             res.writeHead(200, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: true, publishedTo: CHART_REQ_CHANNEL, request: msg }));
         } catch (e) {
-            console.error("[event-service] /charts/subscribe error:", e);
+            logger.error("chart.subscribe.error", requestLogContext(req, { error: toSafeError(e) }));
             res.writeHead(500, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: false, error: "internal error" }));
         }
@@ -362,11 +508,17 @@ const server = http.createServer(async (req, res) => {
             const msg = { type: "CHART_UNSUBSCRIBE", id, symbol, interval, ts: Date.now() };
 
             await redisPub.publish(CHART_REQ_CHANNEL, JSON.stringify(msg));
+            logger.info("chart.unsubscribe.published", requestLogContext(req, {
+                id,
+                symbol,
+                interval,
+                channel: CHART_REQ_CHANNEL,
+            }));
 
             res.writeHead(200, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: true, publishedTo: CHART_REQ_CHANNEL, request: msg }));
         } catch (e) {
-            console.error("[event-service] /charts/unsubscribe error:", e);
+            logger.error("chart.unsubscribe.error", requestLogContext(req, { error: toSafeError(e) }));
             res.writeHead(500, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: false, error: "internal error" }));
         }
@@ -390,11 +542,16 @@ const server = http.createServer(async (req, res) => {
             const msg = { type: "MARKET_DETAIL_SUBSCRIBE", id, symbol, ts: Date.now() };
 
             await redisPub.publish(MARKET_REQ_CHANNEL, JSON.stringify(msg));
+            logger.info("market_detail.subscribe.published", requestLogContext(req, {
+                id,
+                symbol,
+                channel: MARKET_REQ_CHANNEL,
+            }));
 
             res.writeHead(200, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: true, publishedTo: MARKET_REQ_CHANNEL, request: msg }));
         } catch (e) {
-            console.error("[event-service] /market/subscribe error:", e);
+            logger.error("market_detail.subscribe.error", requestLogContext(req, { error: toSafeError(e) }));
             res.writeHead(500, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: false, error: "internal error" }));
         }
@@ -418,11 +575,16 @@ const server = http.createServer(async (req, res) => {
             const msg = { type: "MARKET_DETAIL_UNSUBSCRIBE", id, symbol, ts: Date.now() };
 
             await redisPub.publish(MARKET_REQ_CHANNEL, JSON.stringify(msg));
+            logger.info("market_detail.unsubscribe.published", requestLogContext(req, {
+                id,
+                symbol,
+                channel: MARKET_REQ_CHANNEL,
+            }));
 
             res.writeHead(200, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: true, publishedTo: MARKET_REQ_CHANNEL, request: msg }));
         } catch (e) {
-            console.error("[event-service] /market/unsubscribe error:", e);
+            logger.error("market_detail.unsubscribe.error", requestLogContext(req, { error: toSafeError(e) }));
             res.writeHead(500, { "Content-Type": "application/json" });
             return res.end(JSON.stringify({ ok: false, error: "internal error" }));
         }
@@ -446,6 +608,10 @@ const clients = new Set();
 // Only accept authenticated WS upgrades on /prices. Market data can be public at the
 // producer level, but this app websocket also carries scoped account/order updates.
 server.on("upgrade", (req, socket, head) => {
+    const context = createRequestContext(req.headers);
+    req.requestId = context.requestId;
+    req.traceId = context.traceId;
+
     const u = new URL(req.url || "/", `http://localhost:${PORT}`);
     if (u.pathname !== "/prices") return socket.destroy();
 
@@ -476,12 +642,22 @@ server.on("upgrade", (req, socket, head) => {
 
     wss.handleUpgrade(req, socket, head, (ws) => {
         ws.user = user;
+        ws.connectionId = randomUUID();
+        ws.requestId = req.requestId || null;
+        ws.traceId = req.traceId || ws.requestId;
         wss.emit("connection", ws, req);
     });
 });
 
 wss.on("connection", (ws) => {
     clients.add(ws);
+    logger.info("ws.connected", {
+        connectionId: ws.connectionId,
+        requestId: ws.requestId,
+        traceId: ws.traceId,
+        userId: ws.user?.id,
+        clientCount: clients.size,
+    });
 
     ws.send(
         JSON.stringify({
@@ -505,10 +681,20 @@ wss.on("connection", (ws) => {
 
     ws.on("close", () => {
         clients.delete(ws);
+        logger.info("ws.closed", {
+            connectionId: ws.connectionId,
+            userId: ws.user?.id,
+            clientCount: clients.size,
+        });
     });
 
-    ws.on("error", () => {
+    ws.on("error", (error) => {
         clients.delete(ws);
+        logger.warn("ws.error", {
+            connectionId: ws.connectionId,
+            userId: ws.user?.id,
+            error: toSafeError(error),
+        });
     });
 });
 
@@ -517,7 +703,7 @@ const SCOPED_CHANNELS = [REALTIME_CHANNELS.orders, REALTIME_CHANNELS.balances, R
 function broadcast(channel, message) {
     const validation = validateBroadcastMessage({ channel, message, channels: REALTIME_CHANNELS });
     if (!validation.ok) {
-        console.warn("[event-service] rejected invalid realtime payload", {
+        logger.warn("realtime.payload_rejected", {
             channel,
             errors: validation.errors,
         });
@@ -548,11 +734,11 @@ async function startRedisSubscriber() {
     const sub = createClient({ url: REDIS_URL });
 
     sub.on("error", (err) => {
-        console.error("[event-service] redis error:", safeErrorMessage(err));
+        logger.error("redis.subscriber.error", { error: toSafeError(err) });
     });
 
     await sub.connect();
-    console.log(`[event-service] redis connected: ${redactUrl(REDIS_URL)}`);
+    logger.info("redis.subscriber.connected", { redisUrl: redactUrl(REDIS_URL) });
 
     const forward = (channel, message) => {
         broadcast(channel, message);
@@ -608,12 +794,17 @@ async function startRedisSubscriber() {
         forward(ACCOUNT_RES_CHANNEL, message);
     });
 
-    console.log(`[event-service] subscribed to: ${EVENTS_CHANNEL}`);
-    console.log(`[event-service] subscribed to: ${PRICES_CHANNEL}`);
-    console.log(`[event-service] subscribed to: ${CHARTS_CHANNEL}`);
-    console.log(`[event-service] subscribed to: ${SYMBOL_RES_CHANNEL}`);
-    console.log(`[event-service] subscribed to: ${BALANCES_CHANNEL}`);
-    console.log(`[event-service] subscribed to: ${ACCOUNT_RES_CHANNEL}`);
+    logger.info("redis.subscriptions.ready", {
+        channels: [
+            EVENTS_CHANNEL,
+            PRICES_CHANNEL,
+            CHARTS_CHANNEL,
+            MARKET_DETAIL_CHANNEL,
+            SYMBOL_RES_CHANNEL,
+            BALANCES_CHANNEL,
+            ACCOUNT_RES_CHANNEL,
+        ],
+    });
 
     return sub;
 }
@@ -623,15 +814,14 @@ async function startRedisSubscriber() {
     logStartupConfig();
 
     redisPub = createClient({ url: REDIS_URL });
-    redisPub.on("error", (err) => console.error("[event-service] redis pub error:", safeErrorMessage(err)));
+    redisPub.on("error", (err) => logger.error("redis.publisher.error", { error: toSafeError(err) }));
     await redisPub.connect();
-    console.log(`[event-service] redis publisher connected: ${redactUrl(REDIS_URL)}`);
+    logger.info("redis.publisher.connected", { redisUrl: redactUrl(REDIS_URL) });
 
     const redisSub = await startRedisSubscriber();
 
     server.listen(PORT, () => {
-        console.log(`[event-service] http://localhost:${PORT}`);
-        console.log(`[event-service] ws://localhost:${PORT}/prices`);
+        logger.info("http.listening", { port: PORT, websocketPath: "/prices" });
     });
 
     const shutdown = async () => {
@@ -657,6 +847,6 @@ async function startRedisSubscriber() {
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
 })().catch((e) => {
-    console.error("[event-service] fatal:", safeErrorMessage(e));
+    logger.error("service.fatal", { error: toSafeError(e) });
     process.exit(1);
 });

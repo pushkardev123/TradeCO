@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="320" viewBox="0 0 900 320">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="28" y="34" font-family="Arial, sans-serif" font-size="22" font-weight="700">Complexity Over Git History</text>
+<line x1="58" y1="268" x2="864" y2="268" stroke="#cbd5e1"/>
+<line x1="58" y1="58" x2="58" y2="268" stroke="#cbd5e1"/>
+<text x="18" y="63" font-family="Arial, sans-serif" font-size="12" fill="#64748b">468.00</text>
+<text x="28" y="268" font-family="Arial, sans-serif" font-size="12" fill="#64748b">0</text>
+<path d="M58.0,266.1 L100.4,266.1 L142.8,266.1 L185.3,266.1 L227.7,266.2 L270.1,266.2 L312.5,266.1 L354.9,266.1 L397.4,266.2 L439.8,266.2 L482.2,266.1 L524.6,266.1 L567.1,266.1 L609.5,266.1 L651.9,266.1 L694.3,266.1 L736.7,266.2 L779.2,266.2 L821.6,266.2 L864.0,266.2" fill="none" stroke="#2563eb" stroke-width="3"/>
+<circle cx="58.0" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="100.4" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="142.8" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="185.3" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="227.7" cy="266.2" r="3" fill="#2563eb"/>
+<circle cx="270.1" cy="266.2" r="3" fill="#2563eb"/>
+<circle cx="312.5" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="354.9" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="397.4" cy="266.2" r="3" fill="#2563eb"/>
+<circle cx="439.8" cy="266.2" r="3" fill="#2563eb"/>
+<circle cx="482.2" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="524.6" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="567.1" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="609.5" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="651.9" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="694.3" cy="266.1" r="3" fill="#2563eb"/>
+<circle cx="736.7" cy="266.2" r="3" fill="#2563eb"/>
+<circle cx="779.2" cy="266.2" r="3" fill="#2563eb"/>
+<circle cx="821.6" cy="266.2" r="3" fill="#2563eb"/>
+<circle cx="864.0" cy="266.2" r="3" fill="#2563eb"/>
+<rect x="70" y="286" width="14" height="14" fill="#2563eb"/>
+<text x="90" y="298" font-family="Arial, sans-serif" font-size="13" fill="#111827">Average complexity</text>
+<path d="M58.0,78.2 L100.4,78.2 L142.8,78.2 L185.3,78.2 L227.7,78.2 L270.1,78.2 L312.5,78.2 L354.9,78.2 L397.4,78.2 L439.8,78.2 L482.2,70.6 L524.6,70.6 L567.1,58.0 L609.5,58.0 L651.9,73.7 L694.3,73.7 L736.7,86.3 L779.2,86.3 L821.6,75.5 L864.0,75.5" fill="none" stroke="#dc2626" stroke-width="3"/>
+<circle cx="58.0" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="100.4" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="142.8" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="185.3" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="227.7" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="270.1" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="312.5" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="354.9" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="397.4" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="439.8" cy="78.2" r="3" fill="#dc2626"/>
+<circle cx="482.2" cy="70.6" r="3" fill="#dc2626"/>
+<circle cx="524.6" cy="70.6" r="3" fill="#dc2626"/>
+<circle cx="567.1" cy="58.0" r="3" fill="#dc2626"/>
+<circle cx="609.5" cy="58.0" r="3" fill="#dc2626"/>
+<circle cx="651.9" cy="73.7" r="3" fill="#dc2626"/>
+<circle cx="694.3" cy="73.7" r="3" fill="#dc2626"/>
+<circle cx="736.7" cy="86.3" r="3" fill="#dc2626"/>
+<circle cx="779.2" cy="86.3" r="3" fill="#dc2626"/>
+<circle cx="821.6" cy="75.5" r="3" fill="#dc2626"/>
+<circle cx="864.0" cy="75.5" r="3" fill="#dc2626"/>
+<rect x="250" y="286" width="14" height="14" fill="#dc2626"/>
+<text x="270" y="298" font-family="Arial, sans-serif" font-size="13" fill="#111827">Max complexity</text>
+<text x="58" y="264" font-family="Arial, sans-serif" font-size="11" fill="#64748b">2026-05-16</text>
+<text x="792" y="264" font-family="Arial, sans-serif" font-size="11" fill="#64748b">2026-05-16</text>
+</svg>

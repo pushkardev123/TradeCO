@@ -8,6 +8,7 @@
     },
     "dependencies": {
         "@prisma/client": "^6.19.1",
+        "@tradeco/observability": "0.0.0",
         "@tradeco/redis-stream-contracts": "0.0.0",
         "dotenv": "^17.2.3",
         "redis": "^5.10.0",

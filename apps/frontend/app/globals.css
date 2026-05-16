@@ -25,3 +25,30 @@ body {
   color: var(--tc-text-primary, var(--foreground));
   font-family: var(--tc-font-sans, "Inter", "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif);
 }
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--tc-text-muted) 42%, transparent) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--tc-text-muted) 34%, transparent);
+  border-radius: 999px;
+}
+
+.scrollbar-hide {
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

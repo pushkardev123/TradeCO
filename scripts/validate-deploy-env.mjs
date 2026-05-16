@@ -119,10 +119,10 @@ function main() {
         const databasePassword = decodeUrlPart(parsedDatabaseUrl.password);
         const databaseName = decodeUrlPart(parsedDatabaseUrl.pathname.replace(/^\//, ""));
 
-        assertPostgresIdentifier("DATABASE_URL username", databaseUser, errors);
-        assertPostgresIdentifier("DATABASE_URL database name", databaseName, errors);
-
         if (parsedDatabaseUrl.hostname === "postgres") {
+            assertPostgresIdentifier("DATABASE_URL username", databaseUser, errors);
+            assertPostgresIdentifier("DATABASE_URL database name", databaseName, errors);
+
             if (databaseUser !== postgresUser) {
                 errors.push("DATABASE_URL username must match TRADECO_POSTGRES_USER when DATABASE_URL points to the bundled postgres service.");
             }

@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 10:57 IST
+Last updated: 2026-05-16 11:34 IST
 
 ## Purpose
 
@@ -19,6 +19,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
   - Frontend: `http://127.0.0.1:3000/trade`
   - Backend health: `http://127.0.0.1:8080/health`
   - Event health: `http://127.0.0.1:8081/health`
+  - Execution health: `http://127.0.0.1:8082/health`
 
 ## Completed During This Autonomous Run
 
@@ -87,6 +88,35 @@ Deferred:
 - Add CI pipeline: user explicitly asked to skip CI for now.
 
 ## Active Task Log
+
+### Paused: Add structured logging and observability baseline
+
+- Notion page: `3608ea2b-3f8a-81e4-8bcb-d8ac7d5e770a`
+- Branch: `main`
+- Status at pause: implementation complete locally, not committed, Notion still in progress.
+- User pause requested: 2026-05-16 11:34 IST.
+- Implementation currently staged nowhere:
+  - Added `@tradeco/observability` package with structured JSON logger, request/trace context helpers, safe error serialization, URL redaction, and sensitive field/JWT/signature redaction tests.
+  - Wired backend and event-service HTTP request logging with `X-Request-Id`/`X-Trace-Id` response headers and richer health payloads.
+  - Added execution-service health server on `HEALTH_PORT`/`EXECUTION_HEALTH_PORT`, runtime health state, order stream lifecycle logs, Redis/market/user stream structured logs, and trace/request id propagation from backend order commands.
+  - Updated Dockerfile/package workspace wiring, deploy env example, Docker Compose port mapping, deployment docs, and made `npm run deploy:compose:config` use `config --quiet` to avoid printing resolved secrets.
+- Verification passed before pause:
+  - `npm run test:observability`: pass.
+  - `npm --workspace apps/backend run test`: pass.
+  - `npm --workspace apps/event-service run test`: pass.
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `npm run test:stream-contracts`: pass.
+  - `npm run test:api-contracts`: pass.
+  - `npm --workspace apps/frontend run lint`: pass with the two pre-existing hook dependency warnings in `apps/frontend/app/trade/page.js`.
+  - `npm run deploy:compose:config`: pass with quiet output.
+  - `npm run deploy:compose:up`: pass before the final execution-service log service-name cleanup; stack rebuilt and health checks passed for backend, event-service, execution-service, and frontend `/trade`.
+  - Market-detail subscribe smoke: pass.
+  - `REDIS_URL=redis://127.0.0.1:6379 npm run smoke:p2-redis-stream`: pass.
+  - `REDIS_URL=redis://127.0.0.1:6379 npm run smoke:p2-market-order`: pass.
+  - `git diff --check`: pass.
+- Pause note:
+  - A final post-cleanup `npm run deploy:compose:up` retry failed during Docker `npm ci` with `ERR_SSL_CIPHER_OPERATION_FAILED` while fetching `strip-json-comments` from the npm registry. Existing containers remained running and healthy from the previous successful build.
+  - On resume, rerun `npm run deploy:compose:up`, then health checks and log inspection. If clean, commit this task and update Notion to done.
 
 ### Completed: Replace Float math with Decimal/string-safe trading values
 

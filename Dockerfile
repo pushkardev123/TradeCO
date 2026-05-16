@@ -14,6 +14,7 @@ COPY apps/execution-service/package.json apps/execution-service/package.json
 COPY apps/frontend/package.json apps/frontend/package.json
 COPY packages/api-contracts/package.json packages/api-contracts/package.json
 COPY packages/brand-tokens/package.json packages/brand-tokens/package.json
+COPY packages/observability/package.json packages/observability/package.json
 COPY packages/redis-stream-contracts/package.json packages/redis-stream-contracts/package.json
 RUN npm ci
 RUN case "$TARGETARCH" in \
@@ -55,6 +56,8 @@ CMD ["node", "apps/event-service/src/index.js"]
 
 FROM build AS execution-service
 ENV NODE_ENV=production
+ENV HEALTH_PORT=8082
+EXPOSE 8082
 CMD ["node", "apps/execution-service/src/index.js"]
 
 FROM build AS frontend

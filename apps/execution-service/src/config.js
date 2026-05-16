@@ -4,7 +4,7 @@ import {
     getOrderStreamConfig,
 } from "@tradeco/redis-stream-contracts";
 
-const SERVICE = "execution";
+const SERVICE = "execution-service";
 const DEFAULT_BINANCE_API_BASE = "https://testnet.binance.vision";
 const DEFAULT_BINANCE_WS_BASE = "wss://stream.testnet.binance.vision";
 const DEFAULT_BINANCE_WS_API_BASE = "wss://ws-api.testnet.binance.vision/ws-api/v3";
@@ -141,6 +141,18 @@ export function safeErrorMessage(error) {
         .replace(/(redis(?:s)?:\/\/)([^@\s/]+)@/gi, "$1<redacted>@");
 }
 
+function logConfig(level, msg, fields = {}) {
+    const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        level,
+        service: SERVICE,
+        msg,
+        ...fields,
+    });
+    if (level === "error") console.error(line);
+    else console.log(line);
+}
+
 const errors = [];
 
 const databaseUrl = requireString("DATABASE_URL", errors);
@@ -167,6 +179,7 @@ const binanceWsApiBase = validateBinanceWsApiUrl(
 );
 const accountCacheMs = parseInteger("ACCOUNT_CACHE_MS", 5000, errors, { min: 0 });
 const symbolCacheMs = parseInteger("SYMBOL_CACHE_MS", 600000, errors, { min: 0 });
+const healthPort = parseInteger("HEALTH_PORT", 8082, errors, { min: 1, max: 65535 });
 const reconciliationIntervalMs = parseInteger("RECONCILIATION_INTERVAL_MS", 60000, errors, { min: 0 });
 const reconciliationStaleMs = parseInteger("RECONCILIATION_STALE_MS", 30000, errors, { min: 0 });
 const reconciliationBatchSize = parseInteger("RECONCILIATION_BATCH_SIZE", 100, errors, { min: 1, max: 500 });
@@ -185,10 +198,7 @@ if (marketMode !== "all" && marketMode !== "symbols") {
 }
 
 if (errors.length > 0) {
-    console.error(`[${SERVICE}] Configuration error:`);
-    for (const error of errors) {
-        console.error(`[${SERVICE}] - ${error}`);
-    }
+    logConfig("error", "configuration.error", { errors });
     process.exit(1);
 }
 
@@ -223,6 +233,7 @@ export const config = Object.freeze({
     symbolReqChannel: readEnv("SYMBOL_REQ_CHANNEL", "events:symbol:request"),
     symbolResChannel: readEnv("SYMBOL_RES_CHANNEL", "events:symbol:response"),
     symbolCacheMs,
+    healthPort,
     binanceApiBase,
     binanceWsBase,
     binanceWsApiBase,
@@ -231,7 +242,7 @@ export const config = Object.freeze({
 });
 
 export function logStartupConfig() {
-    console.log(`[${SERVICE}] configuration OK`, {
+    logConfig("info", "configuration.ok", {
         databaseUrl: redactUrl(config.databaseUrl),
         redisUrl: redactUrl(config.redisUrl),
         commandsChannel: config.commandsChannel,
@@ -259,5 +270,6 @@ export function logStartupConfig() {
         reconciliationStaleMs: config.reconciliationStaleMs,
         reconciliationBatchSize: config.reconciliationBatchSize,
         symbolCacheMs: config.symbolCacheMs,
+        healthPort: config.healthPort,
     });
 }

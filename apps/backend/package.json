@@ -9,6 +9,7 @@
     },
     "dependencies": {
         "@tradeco/api-contracts": "0.0.0",
+        "@tradeco/observability": "0.0.0",
         "@tradeco/redis-stream-contracts": "0.0.0",
         "@prisma/client": "^6.19.1",
         "bcrypt": "^6.0.0",

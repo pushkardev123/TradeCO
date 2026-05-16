@@ -4,6 +4,13 @@ import { PrismaClient } from "@prisma/client";
 import { createClient } from "redis";
 import { randomUUID } from "crypto";
 import {
+    createLogger,
+    createRequestContext,
+    durationMs,
+    safeError,
+    setTraceHeaders,
+} from "@tradeco/observability";
+import {
     CANCEL_IN_FLIGHT_STATUSES,
     OPEN_ORDER_STATUSES,
     formatOrderCommandDto,
@@ -14,7 +21,7 @@ import {
 import { verifyAccessToken } from "./jwt.js";
 import { requireAuth } from "./middleware.js";
 import { getAccountInfo } from "./binance.js";
-import { config, isCorsOriginAllowed, logStartupConfig, safeErrorMessage } from "./config.js";
+import { config, isCorsOriginAllowed, logStartupConfig } from "./config.js";
 import {
     getAuthenticatedUserContext,
     getSessionMeta,
@@ -42,10 +49,32 @@ const PORT = config.port;
 const REDIS_URL = config.redisUrl;
 const COMMANDS_CHANNEL = config.commandsChannel;
 const ORDER_COMMAND_STREAM = config.orderCommandStream;
+const logger = createLogger({ service: "backend" });
 
 const prisma = new PrismaClient();
 
 const app = express();
+app.use((req, res, next) => {
+    const context = createRequestContext(req.headers);
+    req.requestId = context.requestId;
+    req.traceId = context.traceId;
+    setTraceHeaders(res, context);
+
+    const startedAt = Date.now();
+    res.on("finish", () => {
+        logger.info("http.request", {
+            requestId: req.requestId,
+            traceId: req.traceId,
+            method: req.method,
+            path: req.path || req.url,
+            statusCode: res.statusCode,
+            durationMs: durationMs(startedAt),
+            userId: req.user?.id,
+        });
+    });
+
+    next();
+});
 app.use(cors({
     origin(origin, callback) {
         if (isCorsOriginAllowed(origin)) {
@@ -58,7 +87,7 @@ app.use(cors({
 app.use(express.json());
 
 const redis = createClient({ url: REDIS_URL });
-redis.on("error", (e) => console.error("[backend] redis error:", safeErrorMessage(e)));
+redis.on("error", (e) => logger.error("redis.error", { error: safeError(e) }));
 
 function hasUserIdField(value) {
     return Boolean(
@@ -97,7 +126,29 @@ function rejectClientUserId(req, res) {
     return true;
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true, service: "backend" }));
+function requestTraceId(req) {
+    return req.traceId || req.requestId || getRequestIdFromHeaders(req.headers);
+}
+
+function orderLogContext(req, fields = {}) {
+    return {
+        requestId: req.requestId,
+        traceId: req.traceId,
+        userId: req.user?.id,
+        ...fields,
+    };
+}
+
+app.get("/health", (req, res) => res.json({
+    ok: true,
+    service: "backend",
+    requestId: req.requestId,
+    redis: {
+        ready: Boolean(redis.isReady),
+        open: Boolean(redis.isOpen),
+    },
+    uptimeSec: Math.round(process.uptime()),
+}));
 
 function isOpenOrderStatus(status) {
     return OPEN_ORDER_STATUSES.includes(String(status || "").toUpperCase());
@@ -139,7 +190,7 @@ function sendAuthError(res, err, fallback = "Server error") {
         return res.status(err.statusCode).json({ ok: false, error: err.message });
     }
 
-    console.error("[backend] auth error:", err?.code || err?.name || fallback);
+    logger.error("auth.error", { error: safeError(err), fallback });
     return res.status(500).json({ ok: false, error: fallback });
 }
 
@@ -196,7 +247,7 @@ app.get("/positions", requireAuth, async (req, res) => {
             const totalPages = Math.max(1, Math.ceil(totalEntries / 10));
             return res.json({ ok: true, items: [], nextCursor: null, totalEntries, totalPages });
         }
-        console.error("[backend] /positions error:", e);
+        logger.error("positions.list.error", orderLogContext(req, { error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -267,7 +318,7 @@ app.get("/orders", requireAuth, async (req, res) => {
             const totalPages = Math.max(1, Math.ceil(totalEntries / 10));
             return res.json({ ok: true, items: [], nextCursor: null, totalEntries, totalPages });
         }
-        console.error(e);
+        logger.error("orders.list.error", orderLogContext(req, { error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -303,7 +354,7 @@ app.get("/orders/open", requireAuth, async (req, res) => {
         const items = commands.map((command) => formatOrderCommandDto(command, latestByOrderId.get(command.orderId)));
         return res.json({ ok: true, items, count: items.length, symbol: symbol || null });
     } catch (e) {
-        console.error("[backend] /orders/open error:", safeErrorMessage(e));
+        logger.error("orders.open.list.error", orderLogContext(req, { error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -336,7 +387,7 @@ app.get("/orders/:orderId", requireAuth, async (req, res) => {
             events: events.map(formatOrderEventDto),
         });
     } catch (e) {
-        console.error("[backend] /orders/:orderId error:", safeErrorMessage(e));
+        logger.error("orders.detail.error", orderLogContext(req, { orderId: req.params.orderId, error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -350,7 +401,7 @@ app.delete("/orders/open", requireAuth, async (req, res) => {
             query: req.query || {},
             userId: req.user.id,
             commandId: randomUUID(),
-            requestId: getRequestIdFromHeaders(req.headers),
+            requestId: requestTraceId(req),
         });
 
         const openOrders = await prisma.orderCommand.findMany({
@@ -376,13 +427,24 @@ app.delete("/orders/open", requireAuth, async (req, res) => {
         }
 
         try {
-            await appendOrderCommandStreamEntry({
+            const streamId = await appendOrderCommandStreamEntry({
                 redis,
                 streamName: ORDER_COMMAND_STREAM,
                 streamEntry: draft.streamEntry,
             });
+            logger.info("order.cancel_all.stream_appended", orderLogContext(req, {
+                commandId: draft.commandId,
+                symbol: draft.symbol,
+                affectedCount: openOrders.length,
+                streamName: ORDER_COMMAND_STREAM,
+                streamId,
+            }));
         } catch (e) {
-            console.error("[backend] /orders/open cancel-all stream append error:", safeErrorMessage(e));
+            logger.error("order.cancel_all.stream_append_failed", orderLogContext(req, {
+                commandId: draft.commandId,
+                symbol: draft.symbol,
+                error: safeError(e),
+            }));
             for (const order of openOrders) {
                 await prisma.orderCommand.update({
                     where: { orderId: order.orderId },
@@ -391,10 +453,10 @@ app.delete("/orders/open", requireAuth, async (req, res) => {
                         errorMsg: "Redis stream append failed",
                     },
                 }).catch((updateError) => {
-                    console.error("[backend] cancel-all failure status update error:", safeErrorMessage(updateError));
+                    logger.error("order.cancel_all.failure_status_update_error", orderLogContext(req, { orderId: order.orderId, error: safeError(updateError) }));
                 });
                 await createOrderLifecycleEvent({ order, status: "CANCEL_APPEND_FAILED" }).catch((eventError) => {
-                    console.error("[backend] cancel-all failure event create error:", safeErrorMessage(eventError));
+                    logger.error("order.cancel_all.failure_event_create_error", orderLogContext(req, { orderId: order.orderId, error: safeError(eventError) }));
                 });
             }
 
@@ -416,7 +478,7 @@ app.delete("/orders/open", requireAuth, async (req, res) => {
         if (e?.statusCode) {
             return res.status(e.statusCode).json({ ok: false, error: e.message });
         }
-        console.error("[backend] /orders/open cancel-all error:", safeErrorMessage(e));
+        logger.error("order.cancel_all.error", orderLogContext(req, { error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -457,7 +519,7 @@ app.delete("/orders/:orderId", requireAuth, async (req, res) => {
             orderId,
             symbol: existing.symbol,
             commandId: randomUUID(),
-            requestId: getRequestIdFromHeaders(req.headers),
+            requestId: requestTraceId(req),
         });
 
         const requestedAt = new Date();
@@ -472,13 +534,25 @@ app.delete("/orders/:orderId", requireAuth, async (req, res) => {
         await createOrderLifecycleEvent({ order: existing, status: "CANCEL_REQUESTED", timestamp: requestedAt });
 
         try {
-            await appendOrderCommandStreamEntry({
+            const streamId = await appendOrderCommandStreamEntry({
                 redis,
                 streamName: ORDER_COMMAND_STREAM,
                 streamEntry: draft.streamEntry,
             });
+            logger.info("order.cancel.stream_appended", orderLogContext(req, {
+                commandId: draft.commandId,
+                orderId,
+                symbol: draft.symbol,
+                streamName: ORDER_COMMAND_STREAM,
+                streamId,
+            }));
         } catch (e) {
-            console.error("[backend] /orders/:orderId cancel stream append error:", safeErrorMessage(e));
+            logger.error("order.cancel.stream_append_failed", orderLogContext(req, {
+                commandId: draft.commandId,
+                orderId,
+                symbol: draft.symbol,
+                error: safeError(e),
+            }));
             await prisma.orderCommand.update({
                 where: { orderId },
                 data: {
@@ -486,10 +560,10 @@ app.delete("/orders/:orderId", requireAuth, async (req, res) => {
                     errorMsg: "Redis stream append failed",
                 },
             }).catch((updateError) => {
-                console.error("[backend] cancel failure status update error:", safeErrorMessage(updateError));
+                logger.error("order.cancel.failure_status_update_error", orderLogContext(req, { orderId, error: safeError(updateError) }));
             });
             await createOrderLifecycleEvent({ order: existing, status: "CANCEL_APPEND_FAILED" }).catch((eventError) => {
-                console.error("[backend] cancel failure event create error:", safeErrorMessage(eventError));
+                logger.error("order.cancel.failure_event_create_error", orderLogContext(req, { orderId, error: safeError(eventError) }));
             });
 
             return res.status(503).json({
@@ -508,7 +582,7 @@ app.delete("/orders/:orderId", requireAuth, async (req, res) => {
         if (e?.statusCode) {
             return res.status(e.statusCode).json({ ok: false, error: e.message });
         }
-        console.error("[backend] /orders/:orderId cancel error:", safeErrorMessage(e));
+        logger.error("order.cancel.error", orderLogContext(req, { orderId: req.params.orderId, error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -524,10 +598,17 @@ app.post("/orders", requireAuth, async (req, res) => {
             body,
             userId: req.user.id,
             orderId,
-            requestId: getRequestIdFromHeaders(req.headers),
+            requestId: requestTraceId(req),
         });
         const filterValidation = await validateOrderDraftAgainstBinanceFilters(orderDraft);
         if (!filterValidation.ok) {
+            logger.warn("order.submit.rejected_by_filters", orderLogContext(req, {
+                orderId,
+                symbol: orderDraft.symbol,
+                side: orderDraft.side,
+                orderType: orderDraft.orderType,
+                errorCount: filterValidation.errors.length,
+            }));
             return res.status(400).json({
                 ok: false,
                 error: "Order violates Binance filters",
@@ -591,14 +672,28 @@ app.post("/orders", requireAuth, async (req, res) => {
 
         try {
             if (appendToStream) {
-                await appendOrderSubmitStreamEntry({
+                const streamId = await appendOrderSubmitStreamEntry({
                     redis,
                     streamName: ORDER_COMMAND_STREAM,
                     streamEntry: orderDraft.streamEntry,
                 });
+                logger.info("order.submit.stream_appended", orderLogContext(req, {
+                    orderId,
+                    symbol: orderDraft.symbol,
+                    side: orderDraft.side,
+                    orderType: orderDraft.orderType,
+                    streamName: ORDER_COMMAND_STREAM,
+                    streamId,
+                }));
             }
         } catch (e) {
-            console.error("[backend] /orders stream append error:", safeErrorMessage(e));
+            logger.error("order.submit.stream_append_failed", orderLogContext(req, {
+                orderId,
+                symbol: orderDraft.symbol,
+                side: orderDraft.side,
+                orderType: orderDraft.orderType,
+                error: safeError(e),
+            }));
             try {
                 await prisma.orderCommand.update({
                     where: { orderId },
@@ -608,7 +703,7 @@ app.post("/orders", requireAuth, async (req, res) => {
                     },
                 });
             } catch (updateError) {
-                console.error("[backend] /orders stream failure status update error:", safeErrorMessage(updateError));
+                logger.error("order.submit.failure_status_update_error", orderLogContext(req, { orderId, error: safeError(updateError) }));
             }
 
             return res.status(503).json({
@@ -627,11 +722,16 @@ app.post("/orders", requireAuth, async (req, res) => {
                     },
                 });
             } catch (updateError) {
-                console.error("[backend] /orders stream retry status update error:", safeErrorMessage(updateError));
+                logger.error("order.submit.retry_status_update_error", orderLogContext(req, { orderId, error: safeError(updateError) }));
             }
         }
 
         await redis.publish(COMMANDS_CHANNEL, JSON.stringify(command));
+        logger.info("order.submit.legacy_pubsub_published", orderLogContext(req, {
+            orderId,
+            symbol: orderDraft.symbol,
+            channel: COMMANDS_CHANNEL,
+        }));
 
         return res.json({ ok: true, orderId, status: "PENDING" });
     } catch (e) {
@@ -641,7 +741,7 @@ app.post("/orders", requireAuth, async (req, res) => {
         if (e?.code === "P2002") {
             return res.status(409).json({ ok: false, error: "orderId already exists" });
         }
-        console.error("[backend] /orders create error:", safeErrorMessage(e));
+        logger.error("order.submit.error", orderLogContext(req, { error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -779,7 +879,7 @@ app.get("/api/trading/positions", requireAuth, async (req, res) => {
 
         return res.json({ ok: true, positions });
     } catch (e) {
-        console.error(e);
+        logger.error("trading.positions.error", orderLogContext(req, { error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Server error" });
     }
 });
@@ -816,7 +916,7 @@ app.get("/api/trading/account", requireAuth, async (req, res) => {
         if (e?.statusCode) {
             return res.status(e.statusCode).json({ ok: false, error: e.message });
         }
-        console.error("[backend] get account error:", e);
+        logger.error("trading.account.error", orderLogContext(req, { error: safeError(e) }));
         return res.status(500).json({ ok: false, error: "Failed to fetch account" });
     }
 });
@@ -824,11 +924,11 @@ app.get("/api/trading/account", requireAuth, async (req, res) => {
 async function main() {
     logStartupConfig();
     await redis.connect();
-    console.log("[backend] redis connected");
-    app.listen(PORT, () => console.log(`[backend] listening http://localhost:${PORT}`));
+    logger.info("redis.connected", { redisReady: Boolean(redis.isReady) });
+    app.listen(PORT, () => logger.info("http.listening", { port: PORT }));
 }
 
 main().catch((e) => {
-    console.error("[backend] fatal:", safeErrorMessage(e));
+    logger.error("service.fatal", { error: safeError(e) });
     process.exit(1);
 });

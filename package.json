@@ -13,7 +13,7 @@
         "infra:down": "docker compose down",
         "infra:logs": "docker compose logs -f postgres redis",
         "deploy:compose:check-env": "node scripts/validate-deploy-env.mjs",
-        "deploy:compose:config": "npm run deploy:compose:check-env && docker compose --env-file .env.deploy -f docker-compose.deploy.yml config",
+        "deploy:compose:config": "npm run deploy:compose:check-env && docker compose --env-file .env.deploy -f docker-compose.deploy.yml config --quiet",
         "deploy:compose:up": "npm run deploy:compose:check-env && docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build",
         "deploy:compose:down": "docker compose --env-file .env.deploy -f docker-compose.deploy.yml down",
         "deploy:compose:logs": "docker compose --env-file .env.deploy -f docker-compose.deploy.yml logs -f",
@@ -26,6 +26,7 @@
         "smoke:p2-redis-stream": "node scripts/p2-redis-stream-smoke.mjs",
         "test:api-contracts": "npm --workspace @tradeco/api-contracts run test",
         "test:brand-tokens": "npm --workspace @tradeco/brand-tokens run test",
+        "test:observability": "npm --workspace @tradeco/observability run test",
         "test:stream-contracts": "npm --workspace @tradeco/redis-stream-contracts run test"
     }
 }

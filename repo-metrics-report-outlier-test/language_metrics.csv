@@ -1,0 +1,6 @@
+language,files,code_lines,comment_lines,blank_lines,total_lines,comment_coverage
+CSS,10,5811,17,1299,7127,0.29
+HTML,9,11,0,0,11,0.00
+JavaScript,342,957468,41034,6772,1005274,4.11
+SQL,4,150,24,31,205,13.79
+TypeScript,5,74,49,37,160,39.84

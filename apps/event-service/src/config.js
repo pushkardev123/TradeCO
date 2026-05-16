@@ -95,6 +95,18 @@ export function safeErrorMessage(error) {
     return message.replace(/(redis(?:s)?:\/\/)([^@\s/]+)@/gi, "$1<redacted>@");
 }
 
+function logConfig(level, msg, fields = {}) {
+    const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        level,
+        service: SERVICE,
+        msg,
+        ...fields,
+    });
+    if (level === "error") console.error(line);
+    else console.log(line);
+}
+
 const errors = [];
 
 const redisUrl = requireString("REDIS_URL", errors);
@@ -105,12 +117,11 @@ const port = parseInteger("PORT", DEFAULT_PORT, errors, { min: 1, max: 65535 });
 const accountCacheMs = parseInteger("ACCOUNT_CACHE_MS", 5000, errors, { min: 0 });
 const symbolCacheMs = parseInteger("SYMBOL_CACHE_MS", 600000, errors, { min: 0 });
 const corsOrigins = parseCorsOrigins(readEnv("CORS_ORIGIN", DEFAULT_CORS_ORIGIN), errors);
+const binanceApiBase = readEnv("BINANCE_API_BASE", "https://testnet.binance.vision");
+validateUrl("BINANCE_API_BASE", binanceApiBase, ["http:", "https:"], errors);
 
 if (errors.length > 0) {
-    console.error(`[${SERVICE}] Configuration error:`);
-    for (const error of errors) {
-        console.error(`[${SERVICE}] - ${error}`);
-    }
+    logConfig("error", "configuration.error", { errors });
     process.exit(1);
 }
 
@@ -132,6 +143,7 @@ export const config = Object.freeze({
     symbolReqChannel: readEnv("SYMBOL_REQ_CHANNEL", "events:symbol:request"),
     symbolResChannel: readEnv("SYMBOL_RES_CHANNEL", "events:symbol:response"),
     symbolCacheMs,
+    binanceApiBase,
     corsOrigins,
 });
 
@@ -143,7 +155,7 @@ export function getCorsAllowOrigin(origin) {
 }
 
 export function logStartupConfig() {
-    console.log(`[${SERVICE}] configuration OK`, {
+    logConfig("info", "configuration.ok", {
         port: config.port,
         redisUrl: redactUrl(config.redisUrl),
         corsOrigins: config.corsOrigins,
@@ -153,6 +165,7 @@ export function logStartupConfig() {
         chartsChannel: config.chartsChannel,
         marketReqChannel: config.marketReqChannel,
         marketDetailChannel: config.marketDetailChannel,
+        binanceApiBase: redactUrl(config.binanceApiBase),
         accountCacheMs: config.accountCacheMs,
         symbolCacheMs: config.symbolCacheMs,
     });

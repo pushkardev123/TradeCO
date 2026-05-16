@@ -130,6 +130,14 @@ The sample nginx config maps:
 - `/event/` to event-service HTTP port `8081`
 - `/ws/` to event-service WebSocket port `8081`
 
+Operational health endpoints:
+
+- Backend: `GET /health` on port `8080`
+- Event service: `GET /health` on port `8081`
+- Execution service: `GET /health` on `HEALTH_PORT`, exposed by Compose as `EXECUTION_HEALTH_PORT` and defaulting to `8082`
+
+Backend, event-service, and execution-service logs are structured JSON lines. Use `X-Request-Id` or `X-Trace-Id` on API calls when you want a known correlation id to follow an order from backend request through Redis Stream processing and execution logs.
+
 ## PM2 alternative
 
 Use PM2 only for a non-Docker Node deployment. Docker Compose already restarts containers with `restart: unless-stopped`, so running PM2 inside the app containers is unnecessary.
@@ -157,3 +165,4 @@ All backend, event-service, and execution-service environment variables must be 
 - `BINANCE_WS_API_BASE` remains `wss://ws-api.testnet.binance.vision/ws-api/v3`.
 - User Binance Testnet API keys are entered during signup/onboarding only.
 - Do not put API keys, JWTs, refresh tokens, signatures, or encrypted credential payloads in logs or deployment docs.
+- Treat structured logs as operational telemetry: they should contain request ids, trace ids, order ids, stream ids, status, and safe error codes/messages only.

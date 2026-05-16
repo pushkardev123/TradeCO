@@ -46,6 +46,7 @@ const MOBILE_TERMINAL_SECTIONS = Object.freeze([
     ["#market-depth", "Book"],
     ["#terminal-activity", "Activity"],
 ]);
+const CHART_VISIBLE_BARS = 120;
 
 export default function TradePage() {
     const router = useRouter();
@@ -130,10 +131,15 @@ export default function TradePage() {
     const [activeTab, setActiveTab] = useState("trades"); // positions | orders | trades
     const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
     const [chartInterval, setChartInterval] = useState("1m"); // 1m | 5m | 1d | 1w
+    const [chartStatus, setChartStatus] = useState("idle"); // idle | loading | waiting | ready | empty | error
+    const [chartError, setChartError] = useState("");
+    const [chartMeta, setChartMeta] = useState({ candleCount: 0, lastCandleTime: null, source: "" });
 
     const chartContainerRef = useRef(null);
     const chartApiRef = useRef(null);
     const candleSeriesRef = useRef(null);
+    const pendingChartSnapshotRef = useRef(null);
+    const chartReadyRef = useRef(false);
     const selectedSymbolRef = useRef(selectedSymbol);
     const chartIntervalRef = useRef(chartInterval);
     const ordersCursorRef = useRef(ordersCursor);
@@ -225,7 +231,6 @@ export default function TradePage() {
             fetchBalances(),
             fetchOrdersPage(ordersCursorRef.current),
             fetchPositionsPage(positionsCursorRef.current),
-            subscribeChart(selectedSymbolRef.current, chartIntervalRef.current),
         ];
 
         await Promise.allSettled(jobs);
@@ -495,69 +500,6 @@ export default function TradePage() {
                         }
                     }
 
-                    if (channel === CHARTS_CHANNEL) {
-                        const sym = String(inner?.symbol || "").toUpperCase();
-                        const itv = String(inner?.interval || "");
-                        if (!sym || sym !== String(selectedSymbolRef.current).toUpperCase()) return;
-                        if (itv && itv !== chartIntervalRef.current) return;
-
-                        const series = candleSeriesRef.current;
-                        if (!series) return;
-
-                        if (inner?.type === "KLINE_SNAPSHOT" && Array.isArray(inner?.candles) && inner?.symbol === selectedSymbolRef.current) {
-                            const bars = inner.candles
-                                .map(c => ({
-                                    time: Number(c.time),        // already seconds
-                                    open: Number(c.open),
-                                    high: Number(c.high),
-                                    low: Number(c.low),
-                                    close: Number(c.close),
-                                }))
-                                .filter(b =>
-                                    Number.isFinite(b.time) &&
-                                    Number.isFinite(b.open) &&
-                                    Number.isFinite(b.high) &&
-                                    Number.isFinite(b.low) &&
-                                    Number.isFinite(b.close)
-                                )
-                                .sort((a, b) => a.time - b.time);
-
-                            series.setData(bars);
-
-                            const chart = chartApiRef.current;
-                            if (chart) {
-                                chart.timeScale().scrollToRealTime();
-                                chart.timeScale().setVisibleLogicalRange({ from: 0, to: 10 });
-                            }
-
-
-                            return;
-                        }
-
-                        if (inner?.type === "KLINE_UPDATE" && inner?.symbol === selectedSymbolRef.current) {
-                            const k = inner?.kline || inner?.k || inner?.data;
-                            if (!k) return;
-
-                            const bar = {
-                                time: Math.floor(Number(k.startTime || k.time) / 1000),
-                                open: Number(k.open),
-                                high: Number(k.high),
-                                low: Number(k.low),
-                                close: Number(k.close),
-                            };
-
-                            if (
-                                !Number.isFinite(bar.time) ||
-                                !Number.isFinite(bar.open) ||
-                                !Number.isFinite(bar.high) ||
-                                !Number.isFinite(bar.low) ||
-                                !Number.isFinite(bar.close)
-                            ) return;
-
-                            series.update(bar);
-                            return;
-                        }
-                    }
                 } catch {
                     // ignore parse errors
                 }
@@ -637,7 +579,7 @@ export default function TradePage() {
             setLastUpdateTs(latestTsRef.current);
         }, UI_FLUSH_MS);
         return () => clearInterval(interval);
-    }, []);
+    }, [UI_FLUSH_MS]);
 
     useEffect(() => {
         if (!authReady) return;
@@ -780,6 +722,125 @@ export default function TradePage() {
 
     function trimZeros(n) {
         return String(n).replace(/\.?0+$/, "");
+    }
+
+    function normalizeChartTime(value) {
+        const time = Number(value);
+        if (!Number.isFinite(time) || time <= 0) return null;
+        // Binance REST candles already arrive in seconds after backend normalization.
+        // WebSocket kline start times arrive in milliseconds.
+        return Math.floor(time > 10_000_000_000 ? time / 1000 : time);
+    }
+
+    function normalizeCandle(candle) {
+        const time = normalizeChartTime(candle?.time ?? candle?.startTime ?? candle?.t);
+        const open = Number(candle?.open ?? candle?.o);
+        const high = Number(candle?.high ?? candle?.h);
+        const low = Number(candle?.low ?? candle?.l);
+        const close = Number(candle?.close ?? candle?.c);
+
+        if (
+            time === null ||
+            !Number.isFinite(open) ||
+            !Number.isFinite(high) ||
+            !Number.isFinite(low) ||
+            !Number.isFinite(close)
+        ) {
+            return null;
+        }
+
+        return { time, open, high, low, close };
+    }
+
+    function normalizeCandleSet(candles) {
+        if (!Array.isArray(candles)) return [];
+
+        const byTime = new Map();
+        for (const candle of candles) {
+            const bar = normalizeCandle(candle);
+            if (!bar) continue;
+            byTime.set(bar.time, bar);
+        }
+
+        return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
+    }
+
+    function fitChartToRecentBars(bars) {
+        const chart = chartApiRef.current;
+        if (!chart) return;
+
+        const timeScale = chart.timeScale();
+        if (!Array.isArray(bars) || bars.length === 0) {
+            timeScale.fitContent();
+            return;
+        }
+
+        if (bars.length <= CHART_VISIBLE_BARS) {
+            timeScale.fitContent();
+            return;
+        }
+
+        timeScale.setVisibleLogicalRange({
+            from: Math.max(0, bars.length - CHART_VISIBLE_BARS),
+            to: bars.length + 4,
+        });
+    }
+
+    function applyChartSnapshot(bars, meta = {}) {
+        const series = candleSeriesRef.current;
+        if (!series) {
+            pendingChartSnapshotRef.current = { bars, meta };
+            return;
+        }
+
+        if (!Array.isArray(bars) || bars.length === 0) {
+            series.setData([]);
+            chartReadyRef.current = false;
+            setChartStatus("empty");
+            setChartError("No candles returned for this market and interval.");
+            setChartMeta({ candleCount: 0, lastCandleTime: null, source: meta.source || "" });
+            return;
+        }
+
+        chartReadyRef.current = true;
+        setChartStatus("ready");
+        setChartError("");
+        setChartMeta({
+            candleCount: bars.length,
+            lastCandleTime: bars[bars.length - 1]?.time || null,
+            source: meta.source || "stream",
+        });
+
+        try {
+            series.setData(bars);
+            fitChartToRecentBars(bars);
+            pendingChartSnapshotRef.current = null;
+        } catch (error) {
+            chartReadyRef.current = false;
+            setChartStatus("error");
+            setChartError(error?.message || "Unable to render candle data.");
+        }
+    }
+
+    function applyChartUpdate(bar) {
+        const series = candleSeriesRef.current;
+        if (!series || !bar) return;
+
+        chartReadyRef.current = true;
+        setChartStatus("ready");
+        setChartError("");
+        setChartMeta((prev) => ({
+            candleCount: Math.max(prev.candleCount || 0, 1),
+            lastCandleTime: bar.time || prev.lastCandleTime || null,
+            source: "WS",
+        }));
+
+        try {
+            series.update(bar);
+        } catch (error) {
+            setChartStatus("error");
+            setChartError(error?.message || "Unable to apply live candle update.");
+        }
     }
 
     function formatByStep(value, step) {
@@ -1046,19 +1107,49 @@ export default function TradePage() {
         }
     }
 
-    const subscribeChart = useCallback(async function subscribeChart(symbol, interval) {
-        try {
-            await fetch(`${eventBaseUrl}/charts/subscribe`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    symbol: String(symbol || "").toUpperCase(),
-                    interval: String(interval || "1m"),
-                }),
-            });
-        } catch {
-            // ignore
+    const requestChartStream = useCallback(async function requestChartStream(symbol, interval, action = "subscribe") {
+        const normalizedSymbol = String(symbol || "").toUpperCase();
+        const normalizedInterval = String(interval || "1m");
+
+        const res = await fetch(`${eventBaseUrl}/charts/${action}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                symbol: normalizedSymbol,
+                interval: normalizedInterval,
+            }),
+        });
+
+        if (!res.ok) {
+            throw new Error(`Chart stream ${action} failed (${res.status})`);
         }
+    }, [eventBaseUrl]);
+
+    const fetchChartSnapshot = useCallback(async function fetchChartSnapshot(symbol, interval) {
+        const qs = new URLSearchParams({
+            symbol: String(symbol || "").toUpperCase(),
+            interval: String(interval || "1m"),
+            limit: "500",
+        });
+
+        const res = await fetch(`${eventBaseUrl}/charts/snapshot?${qs.toString()}`, {
+            method: "GET",
+            cache: "no-store",
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json?.ok === false) {
+            throw new Error(json?.error || `Chart snapshot failed (${res.status})`);
+        }
+
+        const candles = Array.isArray(json?.candles)
+            ? json.candles
+            : Array.isArray(json?.data?.candles)
+                ? json.data.candles
+                : [];
+
+        applyChartSnapshot(normalizeCandleSet(candles), { source: json?.source || "REST" });
+    // Chart helpers are function declarations that read refs/setters; the endpoint URL is the only external input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [eventBaseUrl]);
 
     const requestMarketDetails = useCallback(async function requestMarketDetails(symbol, action = "subscribe") {
@@ -1080,6 +1171,8 @@ export default function TradePage() {
 
     // 1) Create the chart ONCE (do not recreate on theme toggle)
     useEffect(() => {
+        if (!authReady) return;
+
         const el = chartContainerRef.current;
         if (!el) return;
 
@@ -1112,6 +1205,12 @@ export default function TradePage() {
         const series = chart.addSeries(CandlestickSeries, {});
         chartApiRef.current = chart;
         candleSeriesRef.current = series;
+        if (pendingChartSnapshotRef.current) {
+            applyChartSnapshot(
+                pendingChartSnapshotRef.current.bars,
+                pendingChartSnapshotRef.current.meta
+            );
+        }
 
         return () => {
             try {
@@ -1120,7 +1219,9 @@ export default function TradePage() {
             chartApiRef.current = null;
             candleSeriesRef.current = null;
         };
-    }, []);
+    // The chart instance is mounted after auth reveals the chart container; theme/data updates are handled separately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [authReady]);
 
     // 2) Update chart colors when theme changes (do NOT wipe data)
     useEffect(() => {
@@ -1181,14 +1282,129 @@ export default function TradePage() {
 
         fetchSymbolInfo();
         return () => (cancelled = true);
+        // Symbol metadata should refresh only when the selected market changes.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedSymbol]);
 
     useEffect(() => {
-        subscribeChart(selectedSymbol, chartInterval);
+        if (!authReady) return;
+
+        const symbol = String(selectedSymbol || "").toUpperCase();
+        const interval = String(chartInterval || "1m");
+        let cancelled = false;
+        let ws;
+        let waitingTimer;
+        let retryTimer;
+        let reconnectTimer;
+
+        setChartStatus("loading");
+        setChartError("");
+        setChartMeta({ candleCount: 0, lastCandleTime: null, source: "" });
+        chartReadyRef.current = false;
+        pendingChartSnapshotRef.current = null;
         try {
             candleSeriesRef.current?.setData([]);
         } catch { }
-    }, [selectedSymbol, chartInterval, subscribeChart]);
+
+        fetchChartSnapshot(symbol, interval).catch((error) => {
+            if (cancelled) return;
+            setChartStatus((current) => current === "loading" ? "waiting" : current);
+            setChartError(error?.message || "Chart snapshot unavailable");
+        });
+
+        async function connectChartSocket() {
+            let token;
+            try {
+                token = await ensureAccessToken();
+            } catch {
+                if (!cancelled) {
+                    setChartStatus("error");
+                    setChartError("Chart stream authentication failed.");
+                }
+                return;
+            }
+
+            if (cancelled) return;
+
+            const tokenParam = `token=${encodeURIComponent(token)}`;
+            const separator = pricesWsUrl.includes("?") ? "&" : "?";
+            ws = new WebSocket(`${pricesWsUrl}${separator}${tokenParam}`);
+
+            ws.onopen = () => {
+                requestChartStream(symbol, interval, "subscribe").catch((error) => {
+                    if (cancelled) return;
+                    setChartStatus("error");
+                    setChartError(error?.message || "Chart stream unavailable");
+                });
+
+                waitingTimer = setTimeout(() => {
+                    if (cancelled) return;
+                    setChartStatus((current) => current === "loading" ? "waiting" : current);
+                }, 3500);
+
+                retryTimer = setInterval(() => {
+                    if (cancelled) return;
+                    if (chartReadyRef.current) return;
+                    requestChartStream(symbol, interval, "subscribe").catch(() => {});
+                    fetchChartSnapshot(symbol, interval).catch(() => {});
+                }, 8000);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const outer = JSON.parse(event.data);
+                    if (outer?.type !== "REDIS_EVENT" || outer.channel !== CHARTS_CHANNEL) return;
+
+                    let inner = JSON.parse(outer.message);
+                    if (typeof inner === "string") inner = JSON.parse(inner);
+
+                    const sym = String(inner?.symbol || "").toUpperCase();
+                    const itv = String(inner?.interval || "");
+                    if (!sym || sym !== symbol) return;
+                    if (itv && itv !== interval) return;
+
+                    if (inner?.type === "KLINE_SNAPSHOT" && Array.isArray(inner?.candles)) {
+                        applyChartSnapshot(normalizeCandleSet(inner.candles), { source: inner?.source || "REST" });
+                        return;
+                    }
+
+                    if (inner?.type === "KLINE_UPDATE") {
+                        const bar = normalizeCandle(inner?.kline || inner?.k || inner?.data);
+                        if (bar) applyChartUpdate(bar);
+                    }
+                } catch (error) {
+                    setChartStatus("error");
+                    setChartError(error?.message || "Unable to process chart stream data.");
+                }
+            };
+
+            ws.onerror = () => {
+                if (cancelled) return;
+                setChartStatus("error");
+                setChartError("Chart socket connection failed.");
+            };
+
+            ws.onclose = () => {
+                if (cancelled) return;
+                reconnectTimer = setTimeout(connectChartSocket, 2000);
+            };
+        }
+
+        connectChartSocket();
+
+        return () => {
+            cancelled = true;
+            if (waitingTimer) clearTimeout(waitingTimer);
+            if (retryTimer) clearInterval(retryTimer);
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            try {
+                ws?.close();
+            } catch { }
+            requestChartStream(symbol, interval, "unsubscribe").catch(() => {});
+        };
+    // Chart helpers are function declarations and use refs/setters; this socket is scoped by auth, URL, symbol, and interval.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [authReady, selectedSymbol, chartInterval, pricesWsUrl, requestChartStream, fetchChartSnapshot]);
 
     useEffect(() => {
         if (!authReady) return;
@@ -1373,6 +1589,26 @@ export default function TradePage() {
             : TC.tone.warning;
     const lastReplayLabel = lastReplayAt ? `Synced ${new Date(lastReplayAt).toLocaleTimeString()}` : "Pending sync";
     const themeClass = isDark ? TC.theme.dark : TC.theme.light;
+    const chartStatusLabel = {
+        idle: "Chart idle",
+        loading: "Loading candles",
+        waiting: "Waiting for candles",
+        ready: "Candles live",
+        empty: "No candles",
+        error: "Chart error",
+    }[chartStatus] || "Chart";
+    const chartStatusClass =
+        chartStatus === "ready"
+            ? TC.tone.success
+            : chartStatus === "error" || chartStatus === "empty"
+                ? TC.tone.danger
+                : TC.tone.warning;
+    const lastCandleLabel = chartMeta.lastCandleTime
+        ? new Date(chartMeta.lastCandleTime * 1000).toLocaleTimeString()
+        : "—";
+    const topBookSpread = calculateSpread(orderBook?.bids?.[0]?.[0], orderBook?.asks?.[0]?.[0]) || "—";
+    const activeAssetsCount = balances.filter((balance) => Number(balance.free || 0) || Number(balance.locked || 0)).length;
+    const trackedOrderCount = Object.keys(ordersById).length;
 
     const requiresLimitPrice = LIMIT_PRICE_ORDER_TYPES.has(orderType);
     const requiresStopPrice = STOP_PRICE_ORDER_TYPES.has(orderType);
@@ -1489,21 +1725,29 @@ export default function TradePage() {
             </div>
 
             <div className="max-w-[1920px] mx-auto px-3 py-4 sm:px-4 lg:px-6 lg:py-5">
-                <div className="mb-4 flex flex-col gap-2 px-1 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                        <h1 className="text-xl font-semibold tracking-tight">Portfolio & Trade</h1>
+                <div className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h1 className="text-xl font-semibold tracking-tight">Portfolio & Trade</h1>
+                            <span className={`rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${TC.tone.info}`}>
+                                Binance Spot Testnet
+                            </span>
+                        </div>
                         <div className={`mt-1 text-xs ${TC.text.muted}`}>
-                            {selectedSymbol.replace("USDT", "")}/USDT · {formatPrice(currentPrice)}
+                            {selectedSymbol.replace("USDT", "")}/USDT execution workspace · {lastReplayLabel}
                         </div>
                     </div>
-                    <div className={`text-xs ${TC.text.muted}`}>
-                        {lastReplayLabel}
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[620px]">
+                        <TerminalMetric label="Last price" value={formatPrice(currentPrice)} tone={TC.text.primary} />
+                        <TerminalMetric label="Spread" value={topBookSpread} tone={orderBook.status === "ready" ? TC.tone.success : TC.tone.warning} />
+                        <TerminalMetric label="Assets" value={String(activeAssetsCount)} tone={TC.text.primary} />
+                        <TerminalMetric label="Tracked orders" value={String(trackedOrderCount)} tone={trackedOrderCount ? TC.tone.info : TC.text.muted} />
                     </div>
                 </div>
 
                 <MobileTerminalNav />
 
-                <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] 2xl:grid-cols-[380px_minmax(0,1fr)]">
+                <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_420px] 2xl:grid-cols-[380px_minmax(0,1fr)_460px]">
                     {/* Left Column: Controls */}
                     <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
 
@@ -1701,6 +1945,12 @@ export default function TradePage() {
                                         <span className={`font-mono font-medium ${isDark ? "text-white" : "text-black"}`}>{formatPrice(currentPrice)}</span>
                                     </div>
 
+                                    <SymbolFilterSummary
+                                        orderType={orderType}
+                                        status={symbolInfoStatus}
+                                        symbolInfo={symbolInfo}
+                                    />
+
                                     {symbolInfoStatus === "error" && (
                                         <div className={`text-xs bg-rose-500/10 p-2 rounded ${TC.tone.danger}`}>{symbolInfoError}</div>
                                     )}
@@ -1708,7 +1958,7 @@ export default function TradePage() {
                                     <button
                                         onClick={placeOrder}
                                         disabled={isPlacingOrder}
-                                        className={`w-full py-3.5 text-sm font-bold rounded-lg transition-all transform active:scale-[0.98] ${TC.submitButton} ${isPlacingOrder ? "cursor-not-allowed opacity-80" : ""}`}
+                                        className={`w-full rounded-lg py-3.5 text-sm font-bold text-white transition-all transform active:scale-[0.98] ${side === "BUY" ? "bg-emerald-500 hover:bg-emerald-400" : "bg-rose-500 hover:bg-rose-400"} ${isPlacingOrder ? "cursor-not-allowed opacity-80" : ""}`}
                                     >
                                         {isPlacingOrder ? "Submitting..." : (
                                             <>
@@ -1794,7 +2044,7 @@ export default function TradePage() {
                         </BalancesPanel>
                     </div>
 
-                    {/* Right Column: Chart & Data - Added min-w-0 for grid safety */}
+                    {/* Center Column: Chart Workspace */}
                     <div className="space-y-4 flex flex-col h-full min-h-0 w-full min-w-0">
                         {/* Chart Section */}
                         <ChartPanel>
@@ -1805,36 +2055,62 @@ export default function TradePage() {
                                     <div className={`font-mono text-lg font-medium tracking-tight ${isDark ? "text-white" : "text-neutral-900"}`}>
                                         {formatPrice(currentPrice)}
                                     </div>
+                                    <div className={`hidden rounded-full border px-2.5 py-1 text-[11px] font-medium sm:block ${chartStatusClass}`}>
+                                        {chartStatusLabel}
+                                    </div>
                                 </div>
 
-                                <div className={`flex rounded-lg overflow-hidden border ${TC.segment}`}>
-                                    {["1m", "5m", "1d", "1w"].map((t) => (
-                                        <button
-                                            key={t}
-                                            onClick={() => setChartInterval(t)}
-                                            className={`px-3 py-1.5 text-xs font-medium transition-colors ${t === chartInterval
-                                                ? TC.segmentActive
-                                                : TC.segmentInactive}`}
-                                        >
-                                            {t}
-                                        </button>
-                                    ))}
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <div className={`text-[11px] ${TC.text.muted}`}>
+                                        {chartMeta.candleCount ? `${chartMeta.candleCount} bars` : "No bars"} · Last {lastCandleLabel}
+                                    </div>
+                                    <div className={`flex rounded-lg overflow-hidden border ${TC.segment}`}>
+                                        {["1m", "5m", "1d", "1w"].map((t) => (
+                                            <button
+                                                key={t}
+                                                onClick={() => setChartInterval(t)}
+                                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${t === chartInterval
+                                                    ? TC.segmentActive
+                                                    : TC.segmentInactive}`}
+                                            >
+                                                {t}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="relative h-[400px] w-full p-1">
+                            <div className="relative h-[420px] min-h-[420px] w-full p-1 xl:h-[min(56vh,620px)]">
                                 <div ref={chartContainerRef} className="w-full h-full" />
+                                {chartStatus !== "ready" && (
+                                    <div className="pointer-events-none absolute inset-1 flex items-center justify-center">
+                                        <div className="max-w-sm rounded-lg border border-neutral-200 bg-white/90 px-4 py-3 text-center shadow-sm backdrop-blur dark:border-white/10 dark:bg-neutral-950/85">
+                                            <div className={`text-xs font-semibold ${chartStatusClass}`}>{chartStatusLabel}</div>
+                                            <div className={`mt-1 text-xs ${TC.text.muted}`}>
+                                                {chartError ||
+                                                    (chartStatus === "waiting"
+                                                        ? "The request was accepted, but no kline snapshot has arrived yet."
+                                                        : "Preparing the selected market and interval.")}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </ChartPanel>
+                    </div>
 
+                    {/* Right Column: Market Microstructure */}
+                    <div className="min-w-0 xl:sticky xl:top-20 xl:self-start">
                         <MarketMicrostructurePanel
                             error={marketDetailError}
                             orderBook={orderBook}
                             selectedSymbol={selectedSymbol}
                             tradeTape={tradeTape}
                         />
+                    </div>
 
-                        {/* Tabs & Table Section */}
+                    {/* Bottom Workspace: Portfolio and market activity */}
+                    <div className="xl:col-start-2 xl:col-span-2">
                         <ActivityPanel>
                             {/* Header: Flex col on mobile, row on desktop to prevent squashing */}
                             <div className="flex flex-col md:flex-row md:items-center justify-between px-4 pt-4 pb-2 border-b border-neutral-100 dark:border-white/5 gap-4">
@@ -1843,7 +2119,7 @@ export default function TradePage() {
                                     {[
                                         { id: "positions", label: "Open Positions" },
                                         { id: "orders", label: "Order History" },
-                                        { id: "trades", label: "Market Trades" },
+                                        { id: "trades", label: "Market Board" },
                                     ].map((t) => (
                                         <button
                                             key={t.id}
@@ -2029,6 +2305,50 @@ function MobileTerminalNav() {
     );
 }
 
+function TerminalMetric({ label, value, tone }) {
+    return (
+        <div className="rounded-lg border border-neutral-200 bg-white/70 px-3 py-2 shadow-sm dark:border-white/10 dark:bg-white/[0.03]">
+            <div className={`text-[10px] font-medium uppercase tracking-wide ${TC.text.muted}`}>{label}</div>
+            <div className={`mt-1 truncate font-mono text-sm font-semibold ${tone || TC.text.primary}`}>{value}</div>
+        </div>
+    );
+}
+
+function SymbolFilterSummary({ orderType, status, symbolInfo }) {
+    if (status === "loading") {
+        return (
+            <div className={`rounded-lg border border-neutral-200 p-3 text-xs dark:border-white/10 ${TC.text.muted}`}>
+                Loading Binance filters...
+            </div>
+        );
+    }
+
+    if (!symbolInfo) return null;
+
+    const fields = [
+        ["Min qty", symbolInfo.minQty],
+        ["Step", symbolInfo.stepSize],
+        ["Min notional", symbolInfo.minNotional ? `${trimNumericZeros(symbolInfo.minNotional)} USDT` : "—"],
+    ];
+
+    return (
+        <div className="rounded-lg border border-neutral-200 bg-neutral-50/60 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className="mb-2 flex items-center justify-between">
+                <span className={`text-[11px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>Exchange filters</span>
+                <span className={`text-[11px] font-medium ${TC.tone.success}`}>{orderType}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+                {fields.map(([label, value]) => (
+                    <div key={label} className="min-w-0">
+                        <div className={`text-[10px] ${TC.text.muted}`}>{label}</div>
+                        <div className="mt-0.5 truncate font-mono text-[11px]">{value || "—"}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 function formatPriceValue(value) {
     if (!Number.isFinite(Number(value))) return "—";
     return Number(value).toFixed(6).replace(/\.?0+$/, "");
@@ -2072,7 +2392,7 @@ function ChartPanel({ children }) {
 
 function ActivityPanel({ children }) {
     return (
-        <TerminalPanel id="terminal-activity" className="flex min-h-[500px] flex-1 flex-col overflow-hidden">
+        <TerminalPanel id="terminal-activity" className="flex min-h-[420px] flex-1 flex-col overflow-hidden">
             {children}
         </TerminalPanel>
     );
@@ -2082,7 +2402,7 @@ function MarketMicrostructurePanel({ error, orderBook, selectedSymbol, tradeTape
     const spread = calculateSpread(orderBook?.bids?.[0]?.[0], orderBook?.asks?.[0]?.[0]);
 
     return (
-        <TerminalPanel id="market-depth" className="overflow-hidden">
+        <TerminalPanel id="market-depth" className="flex min-h-[420px] flex-col overflow-hidden xl:h-[min(56vh,620px)]">
             <div className="flex flex-col gap-3 border-b border-neutral-100 p-4 dark:border-white/5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h3 className="text-sm font-semibold tracking-tight">Order Book & Tape</h3>
@@ -2090,14 +2410,14 @@ function MarketMicrostructurePanel({ error, orderBook, selectedSymbol, tradeTape
                         {selectedSymbol} {spread ? `spread ${spread}` : "waiting for depth"}
                     </div>
                 </div>
-                <div className={`text-xs ${orderBook?.status === "ready" ? TC.tone.success : TC.tone.warning}`}>
+                <div className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${orderBook?.status === "ready" ? TC.tone.success : TC.tone.warning}`}>
                     {orderBook?.status === "ready" ? "Live depth" : "Loading"}
                 </div>
             </div>
 
             {error && <div className={`px-4 pt-3 text-xs ${TC.tone.danger}`}>{error}</div>}
 
-            <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.7fr)]">
+            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
                 <OrderBookView asks={orderBook?.asks || []} bids={orderBook?.bids || []} />
                 <TradeTapeView trades={tradeTape} />
             </div>
@@ -2110,7 +2430,7 @@ function OrderBookView({ asks, bids }) {
     const topBids = bids.slice(0, 10);
 
     return (
-        <div className="min-w-0 border-b border-neutral-100 p-4 dark:border-white/5 lg:border-b-0 lg:border-r">
+        <div className="min-w-0 border-b border-neutral-100 p-4 dark:border-white/5">
             <div className={`grid grid-cols-3 pb-2 text-[11px] font-medium uppercase ${TC.text.muted}`}>
                 <span>Price</span>
                 <span className="text-right">Size</span>
@@ -2148,13 +2468,13 @@ function BookLevelRow({ price, quantity, side }) {
 
 function TradeTapeView({ trades }) {
     return (
-        <div className="min-w-0 p-4">
+        <div className="min-w-0 overflow-hidden p-4">
             <div className={`grid grid-cols-3 pb-2 text-[11px] font-medium uppercase ${TC.text.muted}`}>
                 <span>Price</span>
                 <span className="text-right">Size</span>
                 <span className="text-right">Time</span>
             </div>
-            <div className="max-h-[280px] space-y-1 overflow-auto pr-1">
+            <div className="custom-scrollbar max-h-[240px] space-y-1 overflow-auto pr-1">
                 {trades.length === 0 ? (
                     <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for trades</div>
                 ) : trades.slice(0, 30).map((trade) => (

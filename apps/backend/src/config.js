@@ -119,6 +119,18 @@ export function safeErrorMessage(error) {
         .replace(/(redis(?:s)?:\/\/)([^@\s/]+)@/gi, "$1<redacted>@");
 }
 
+function logConfig(level, msg, fields = {}) {
+    const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        level,
+        service: SERVICE,
+        msg,
+        ...fields,
+    });
+    if (level === "error") console.error(line);
+    else console.log(line);
+}
+
 const errors = [];
 
 const databaseUrl = requireString("DATABASE_URL", errors);
@@ -145,10 +157,7 @@ try {
 }
 
 if (errors.length > 0) {
-    console.error(`[${SERVICE}] Configuration error:`);
-    for (const error of errors) {
-        console.error(`[${SERVICE}] - ${error}`);
-    }
+    logConfig("error", "configuration.error", { errors });
     process.exit(1);
 }
 
@@ -171,7 +180,7 @@ export function isCorsOriginAllowed(origin) {
 }
 
 export function logStartupConfig() {
-    console.log(`[${SERVICE}] configuration OK`, {
+    logConfig("info", "configuration.ok", {
         port: config.port,
         databaseUrl: redactUrl(config.databaseUrl),
         redisUrl: redactUrl(config.redisUrl),

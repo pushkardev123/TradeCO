@@ -100,12 +100,15 @@ export async function handleOrderStreamMessage({
     message,
     processCommand,
     safeErrorMessage = defaultSafeErrorMessage,
+    logger = null,
 }) {
     let command;
+    const startedAt = Date.now();
 
     try {
         command = parseOrderCommandStreamEntry(message.fields);
     } catch (error) {
+        const attempts = await getDeliveryCount({ redis, streamName, groupName, messageId: message.id });
         await writeDeadLetterAndAck({
             redis,
             streamName,
@@ -113,15 +116,40 @@ export async function handleOrderStreamMessage({
             dlqStreamName,
             message,
             command: message.fields,
-            attempts: await getDeliveryCount({ redis, streamName, groupName, messageId: message.id }),
+            attempts,
             reason: `Invalid stream command: ${safeErrorMessage(error)}`,
+        });
+        logStream(logger, "warn", "order_stream.message_dead_lettered", {
+            streamName,
+            groupName,
+            streamMessageId: message.id,
+            reason: "invalid",
+            attempts,
+            durationMs: elapsedMs(startedAt),
         });
         return { outcome: "dead-lettered", reason: "invalid", id: message.id };
     }
 
+    const baseFields = {
+        streamName,
+        groupName,
+        streamMessageId: message.id,
+        messageType: command.messageType,
+        commandId: command.commandId,
+        orderId: command.orderId,
+        userId: command.userId,
+        symbol: command.symbol,
+        requestId: command.requestId,
+    };
+
     try {
         const result = await processCommand(command);
         await redis.xAck(streamName, groupName, message.id);
+        logStream(logger, "info", "order_stream.message_acked", {
+            ...baseFields,
+            outcome: result?.outcome,
+            durationMs: elapsedMs(startedAt),
+        });
         return { outcome: "acked", id: message.id, result };
     } catch (error) {
         const attempts = await getDeliveryCount({ redis, streamName, groupName, messageId: message.id });
@@ -137,9 +165,22 @@ export async function handleOrderStreamMessage({
                 attempts,
                 reason: safeErrorMessage(error),
             });
+            logStream(logger, "error", "order_stream.message_dead_lettered", {
+                ...baseFields,
+                reason: "max-attempts",
+                attempts,
+                error: safeErrorMessage(error),
+                durationMs: elapsedMs(startedAt),
+            });
             return { outcome: "dead-lettered", reason: "max-attempts", id: message.id };
         }
 
+        logStream(logger, "warn", "order_stream.message_pending", {
+            ...baseFields,
+            attempts,
+            error: safeErrorMessage(error),
+            durationMs: elapsedMs(startedAt),
+        });
         throw error;
     }
 }
@@ -155,6 +196,7 @@ export function startOrderStreamConsumer({
     maxAttempts,
     processCommand,
     safeErrorMessage = defaultSafeErrorMessage,
+    logger = null,
 }) {
     let stopped = false;
 
@@ -187,7 +229,12 @@ export function startOrderStreamConsumer({
                 });
                 await handleMessages({ messages: fresh });
             } catch (error) {
-                console.error("[execution] order stream consumer error:", safeErrorMessage(error));
+                logStream(logger, "error", "order_stream.consumer_error", {
+                    streamName,
+                    groupName,
+                    consumerName,
+                    error: safeErrorMessage(error),
+                });
                 await sleep(1000);
             }
         }
@@ -204,8 +251,11 @@ export function startOrderStreamConsumer({
                 message,
                 processCommand,
                 safeErrorMessage,
+                logger,
             }).catch((error) => {
-                console.warn("[execution] order stream message left pending:", {
+                logStream(logger, "warn", "order_stream.message_left_pending", {
+                    streamName,
+                    groupName,
                     id: message.id,
                     error: safeErrorMessage(error),
                 });
@@ -268,6 +318,17 @@ function isBusyGroupError(error) {
 
 function defaultSafeErrorMessage(error) {
     return String(error?.message || error || "Unknown error");
+}
+
+function logStream(logger, level, message, fields = {}) {
+    const fn = logger?.[level];
+    if (typeof fn === "function") {
+        fn.call(logger, message, fields);
+    }
+}
+
+function elapsedMs(startedAt) {
+    return Math.max(0, Date.now() - Number(startedAt || Date.now()));
 }
 
 function sleep(ms) {

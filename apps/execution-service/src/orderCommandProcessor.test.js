@@ -75,6 +75,7 @@ test("normalizes legacy Pub/Sub command messages", () => {
         side: "buy",
         type: "market",
         quantity: 0.001,
+        requestId: "req_123",
     }));
 
     assert.deepEqual(command, {
@@ -85,10 +86,7 @@ test("normalizes legacy Pub/Sub command messages", () => {
         side: "BUY",
         orderType: "MARKET",
         quantity: "0.001",
-        quoteOrderQty: undefined,
-        price: undefined,
-        stopPrice: undefined,
-        timeInForce: undefined,
+        requestId: "req_123",
     });
 });
 

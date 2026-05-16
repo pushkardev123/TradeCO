@@ -1,0 +1,13 @@
+{
+    "name": "@tradeco/observability",
+    "private": true,
+    "type": "module",
+    "version": "0.0.0",
+    "main": "src/index.js",
+    "exports": {
+        ".": "./src/index.js"
+    },
+    "scripts": {
+        "test": "node --test src/*.test.js"
+    }
+}
