@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 09:22 IST
+Last updated: 2026-05-16 09:29 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current local commit: `44c8482` (`Add shared API contracts package`)
+- Current local commit: `c96679b` (`Add frontend reconnect replay recovery`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -35,6 +35,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `5aaea86` | Implement full Binance filter and risk validation layer | Shared decimal-safe Binance filter validation, backend/execution enforcement before submission, field-level errors, and deploy-path verification. |
 | `f7c5dfe` | Add environment validation and startup config checks; Create runbooks for operations and testnet reset handling | Added deploy env preflight validation, caught/fixed local Postgres role-length startup failure, verified clean Compose recovery, health endpoints, tests, and Redis smokes. |
 | `44c8482` | Create shared API and domain contract packages | Added framework-free API/domain contracts package, moved backend DTO/status constants and frontend realtime/order constants onto shared contracts, verified service tests, frontend build, Compose rebuild, and smokes. |
+| `c96679b` | Add reconnect and replay behavior | Frontend now refreshes backend snapshots, resubscribes chart state, tracks reconnect attempts, and exposes realtime replay state after websocket reconnect or tab/mobile resume. |
 
 ## Working Rules
 
@@ -82,9 +83,8 @@ This sequence will be reconciled against Notion before each item starts.
 | 6 | Implement full Binance filter and risk validation layer | Depends on string-safe decimal work and exchange info client support. |
 | 7 | Add advanced single order types | Product expansion after validation layer is safer. |
 | 8 | Add order book and trade tape | Frontend/realtime expansion after event contracts stabilize. |
-| 9 | Create shared API and domain contract packages | Useful once contracts have settled from backend/event/execution work. |
-| 10 | Add structured logging and observability baseline | Cross-cutting hardening after core flows stabilize. |
-| 11 | Create production technical presentation and app overview | Final manager/developer narrative after implementation state is stable. |
+| 9 | Add structured logging and observability baseline | Cross-cutting hardening after core flows stabilize. |
+| 10 | Create production technical presentation and app overview | Final manager/developer narrative after implementation state is stable. |
 
 ## Active Task Log
 
@@ -328,4 +328,23 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p0-auth-boundary`: pass.
   - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
   - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `git diff --check`: pass.
+
+### Completed: Add reconnect and replay behavior
+
+- Notion page: `3608ea2b-3f8a-8116-a94b-fe6d492a3f4d`
+- Status at start: `In progress`, `P1`, medium risk.
+- Branch: `main`
+- Completed: 2026-05-16 09:29 IST
+- Commit: `c96679b` (`Add frontend reconnect replay recovery`)
+- Goal: recover private frontend state after websocket reconnects, browser focus, or mobile/tab resume without weakening websocket authentication.
+- Implementation:
+  - Added frontend replay state for reconnect count, retry attempt, replay sync status, and last successful snapshot refresh.
+  - On websocket open/reopen, refreshes balances, orders, positions, and active chart subscription state from backend snapshots.
+  - On visibility/focus resume, replays the same backend snapshots and chart subscription.
+  - Updated the terminal header realtime pill to expose live, syncing, reconnecting, auth, and offline states.
+- Verification:
+  - `npm --workspace apps/frontend run lint`: pass with existing hook dependency warnings only.
+  - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
+  - `npm run smoke:p0-auth-boundary`: pass.
   - `git diff --check`: pass.
