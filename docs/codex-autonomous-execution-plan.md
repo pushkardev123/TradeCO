@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 09:53 IST
+Last updated: 2026-05-16 10:10 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current local commit: `a7ad07d` (`Add advanced single order support`)
+- Current local commit: `0c47b03` (`Add tokenized brand system`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -37,6 +37,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `44c8482` | Create shared API and domain contract packages | Added framework-free API/domain contracts package, moved backend DTO/status constants and frontend realtime/order constants onto shared contracts, verified service tests, frontend build, Compose rebuild, and smokes. |
 | `c96679b` | Add reconnect and replay behavior | Frontend now refreshes backend snapshots, resubscribes chart state, tracks reconnect attempts, and exposes realtime replay state after websocket reconnect or tab/mobile resume. |
 | `a7ad07d` | Add advanced single order types | Added quote-sized market orders, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, and LIMIT_MAKER support through shared contracts, backend validation/persistence, execution request building, frontend controls, and Prisma migration. |
+| `0c47b03` | Create tokenized brand system | Added shared brand token package with mobile-reusable semantic tokens, CSS variables/component classes, frontend wiring for core terminal primitives, Docker workspace integration, and focused token tests. |
 
 ## Working Rules
 
@@ -383,3 +384,28 @@ This sequence will be reconciled against Notion before each item starts.
   - `git diff --check`: pass.
 - Verification limitation:
   - Browser automation tools were not available in this session and the Node REPL environment did not have Playwright installed, so visual verification was limited to production build, `/trade` HTTP 200, and code inspection.
+
+### Completed: Create tokenized brand system
+
+- Notion page: `3608ea2b-3f8a-8115-9b26-fa88cace6ec6`
+- Status at start: `Not started`, `P1`, medium risk.
+- Branch: `main`
+- Completed: 2026-05-16 10:10 IST
+- Commit: `0c47b03` (`Add tokenized brand system`)
+- Goal: define a coherent trading-terminal visual system that can map to future mobile clients without tying token names to web-only implementation details.
+- Implementation:
+  - Added `@tradeco/brand-tokens` with semantic color, spacing, radius, and typography tokens.
+  - Added package-shipped CSS variables and component classes for terminal shell, panels, inputs, segments, status tones, trading side badges, tabs, symbol links, and buttons.
+  - Imported the brand theme CSS into the frontend global stylesheet.
+  - Wired the trading terminal core primitives to shared token class names while preserving the existing workflow and layout scope.
+  - Added Dockerfile workspace package copy support and a root `npm run test:brand-tokens` script.
+- Verification:
+  - `npm run test:brand-tokens`: pass.
+  - `npm --workspace apps/frontend run lint`: pass with existing hook dependency warnings only.
+  - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
+  - `npm run deploy:compose:check-env`: pass.
+  - `npm run deploy:compose:up`: pass and rebuilt all app images.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `git diff --check`: pass.
+- Verification limitation:
+  - Browser automation tools were not available in this session, so visual verification was limited to production build, Dockerized `/trade` HTTP 200, and code inspection.
