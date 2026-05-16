@@ -25,6 +25,10 @@ export default function TradePage() {
     const router = useRouter();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [status, setStatus] = useState("CONNECTING");
+    const [replayStatus, setReplayStatus] = useState("idle");
+    const [lastReplayAt, setLastReplayAt] = useState(null);
+    const [reconnectCount, setReconnectCount] = useState(0);
+    const [connectionAttempt, setConnectionAttempt] = useState(0);
     const [apiMsg, setApiMsg] = useState("");
     const [isPlacingOrder, setIsPlacingOrder] = useState(false);
     const [pendingOrderId, setPendingOrderId] = useState(null);
@@ -102,6 +106,10 @@ export default function TradePage() {
     const candleSeriesRef = useRef(null);
     const selectedSymbolRef = useRef(selectedSymbol);
     const chartIntervalRef = useRef(chartInterval);
+    const ordersCursorRef = useRef(ordersCursor);
+    const positionsCursorRef = useRef(positionsCursor);
+    const websocketOpenedRef = useRef(false);
+    const replaySnapshotsRef = useRef(null);
 
     useEffect(() => {
         selectedSymbolRef.current = selectedSymbol;
@@ -110,6 +118,11 @@ export default function TradePage() {
     useEffect(() => {
         chartIntervalRef.current = chartInterval;
     }, [chartInterval]);
+
+    useEffect(() => {
+        ordersCursorRef.current = ordersCursor;
+        positionsCursorRef.current = positionsCursor;
+    }, [ordersCursor, positionsCursor]);
 
     const [side, setSide] = useState("BUY");
     const [orderType, setOrderType] = useState("MARKET");
@@ -165,6 +178,24 @@ export default function TradePage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [authReady]);
 
+    async function replayRealtimeSnapshots() {
+        if (!authReady) return;
+
+        setReplayStatus("syncing");
+        const jobs = [
+            fetchBalances(),
+            fetchOrdersPage(ordersCursorRef.current),
+            fetchPositionsPage(positionsCursorRef.current),
+            subscribeChart(selectedSymbolRef.current, chartIntervalRef.current),
+        ];
+
+        await Promise.allSettled(jobs);
+        setLastReplayAt(Date.now());
+        setReplayStatus("ready");
+    }
+
+    replaySnapshotsRef.current = replayRealtimeSnapshots;
+
     const [wsMsgCount, setWsMsgCount] = useState(0);
 
     useEffect(() => {
@@ -200,12 +231,17 @@ export default function TradePage() {
             }
 
             ws.onopen = () => {
+                const wasReconnect = websocketOpenedRef.current;
+                websocketOpenedRef.current = true;
                 attempt = 0;
+                setConnectionAttempt(0);
                 setStatus("OPEN");
+                if (wasReconnect) setReconnectCount((count) => count + 1);
+                replaySnapshotsRef.current?.(wasReconnect ? "reconnect" : "connect");
             };
 
             ws.onclose = () => {
-                setStatus("CLOSED");
+                setStatus("RECONNECTING");
                 scheduleReconnect();
             };
 
@@ -450,6 +486,8 @@ export default function TradePage() {
             if (cancelled) return;
             if (retryTimer) return;
             attempt += 1;
+            setConnectionAttempt(attempt);
+            setStatus("RECONNECTING");
             const delay = Math.min(8000, 500 * attempt);
             retryTimer = setTimeout(() => {
                 retryTimer = null;
@@ -467,6 +505,22 @@ export default function TradePage() {
             } catch { }
         };
     }, [authReady, pricesWsUrl, MAX_SYMBOLS, pendingOrderId, router]);
+
+    useEffect(() => {
+        if (!authReady) return;
+
+        const replayOnResume = () => {
+            if (document.visibilityState && document.visibilityState !== "visible") return;
+            replaySnapshotsRef.current?.("resume");
+        };
+
+        document.addEventListener("visibilitychange", replayOnResume);
+        window.addEventListener("focus", replayOnResume);
+        return () => {
+            document.removeEventListener("visibilitychange", replayOnResume);
+            window.removeEventListener("focus", replayOnResume);
+        };
+    }, [authReady]);
 
     useEffect(() => {
         try {
@@ -1149,6 +1203,25 @@ export default function TradePage() {
     const totalSymbols = symbolOrderRef.current.length;
 
     const currentPrice = marketBoard[selectedSymbol]?.price;
+    const isRealtimeOpen = status === "OPEN";
+    const connectionLabel =
+        replayStatus === "syncing"
+            ? "Syncing"
+            : isRealtimeOpen
+                ? "Live"
+                : status === "RECONNECTING"
+                    ? `Reconnect ${connectionAttempt || 1}`
+                    : status === "AUTH_ERROR"
+                        ? "Auth"
+                        : "Offline";
+    const connectionTone = isRealtimeOpen
+        ? replayStatus === "syncing"
+            ? "text-cyan-500"
+            : "text-emerald-500"
+        : status === "AUTH_ERROR"
+            ? "text-rose-500"
+            : "text-amber-500";
+    const lastReplayLabel = lastReplayAt ? `Synced ${new Date(lastReplayAt).toLocaleTimeString()}` : "Pending sync";
 
     const priceLabel =
         orderType === "MARKET" ? "Price" : orderType === "STOP_LOSS" ? "Stop price" : "Limit price";
@@ -1188,12 +1261,15 @@ export default function TradePage() {
 
                     <div className="flex items-center gap-3">
                         {/* Live Indicator with Glow */}
-                        <div className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${isDark ? "bg-neutral-900/50 border-white/5 text-emerald-400" : "bg-white border-black/5 text-emerald-600"}`}>
+                        <div
+                            className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${isDark ? "bg-neutral-900/50 border-white/5" : "bg-white border-black/5"} ${connectionTone}`}
+                            title={`${lastReplayLabel}${reconnectCount ? ` • reconnects ${reconnectCount}` : ""}`}
+                        >
                             <span className="relative flex h-2 w-2">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                {isRealtimeOpen && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-75"></span>}
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-current"></span>
                             </span>
-                            Live
+                            {connectionLabel}
                         </div>
 
                         <div className="flex items-center  dark:bg-neutral-900 bg-neutral-100 rounded-full dark:border-white/5">
