@@ -47,6 +47,8 @@ const BALANCES_CHANNEL = config.balancesChannel;
 // Chart (candlestick / kline) streaming (event-service -> execution-service)
 const CHART_REQ_CHANNEL = config.chartReqChannel;
 const CHARTS_CHANNEL = config.chartsChannel;
+const MARKET_REQ_CHANNEL = config.marketReqChannel;
+const MARKET_DETAIL_CHANNEL = config.marketDetailChannel;
 const DEFAULT_KLINE_INTERVAL = config.defaultKlineInterval;
 
 // Account info RPC (event-service -> execution-service)
@@ -120,6 +122,7 @@ const userStreams = new Map(); // userId -> { ws, subscriptionId, placeholder: b
 
 // Kline stream registry: key = `${symbol}|${interval}` -> { ws, lastKline, refCount, createdAt }
 const klineStreams = new Map();
+const marketDetailStreams = new Map(); // symbol -> { ws, refCount, createdAt }
 
 function klineKey(symbol, interval) {
     return `${String(symbol || "").toUpperCase()}|${String(interval || "").toLowerCase()}`;
@@ -134,6 +137,74 @@ function buildKlineWsUrl(symbol, interval) {
     const sym = String(symbol || "").toLowerCase();
     const iv = String(interval || "").toLowerCase();
     return `${BINANCE_WS_BASE}/ws/${sym}@kline_${iv}`;
+}
+
+function buildMarketDetailWsUrl(symbol) {
+    const sym = String(symbol || "").toLowerCase();
+    return `${BINANCE_WS_BASE}/stream?streams=${sym}@depth20@100ms/${sym}@aggTrade`;
+}
+
+function normalizeBookLevels(levels, limit = 20) {
+    if (!Array.isArray(levels)) return [];
+    return levels
+        .slice(0, limit)
+        .map((level) => {
+            if (!Array.isArray(level) || level.length < 2) return null;
+            const price = String(level[0] ?? "");
+            const quantity = String(level[1] ?? "");
+            if (!price || !quantity) return null;
+            return [price, quantity];
+        })
+        .filter(Boolean);
+}
+
+function normalizeTradeTapeItem(trade) {
+    if (!trade || typeof trade !== "object") return null;
+    const price = String(trade.p ?? trade.price ?? "");
+    const quantity = String(trade.q ?? trade.quantity ?? "");
+    const ts = Number(trade.T ?? trade.ts ?? trade.E ?? Date.now());
+    if (!price || !quantity || !Number.isFinite(ts)) return null;
+    return {
+        id: String(trade.a ?? trade.id ?? `${ts}-${price}-${quantity}`),
+        price,
+        quantity,
+        side: trade.m ? "SELL" : "BUY",
+        ts,
+    };
+}
+
+function parseMarketDetailMessage(raw) {
+    let parsed;
+    try { parsed = JSON.parse(raw.toString()); } catch { return null; }
+    const data = parsed?.data || parsed;
+    const symbol = String(data?.s || parsed?.stream?.split("@")?.[0] || "").toUpperCase();
+    if (!symbol) return null;
+
+    if (Array.isArray(data?.bids) || Array.isArray(data?.asks)) {
+        return {
+            type: "ORDER_BOOK_UPDATE",
+            ts: Date.now(),
+            symbol,
+            lastUpdateId: data?.lastUpdateId ?? data?.u ?? null,
+            bids: normalizeBookLevels(data?.bids || data?.b),
+            asks: normalizeBookLevels(data?.asks || data?.a),
+            source: "WS",
+        };
+    }
+
+    if (data?.e === "aggTrade") {
+        const trade = normalizeTradeTapeItem(data);
+        if (!trade) return null;
+        return {
+            type: "TRADE_TAPE_UPDATE",
+            ts: trade.ts,
+            symbol,
+            trades: [trade],
+            source: "WS",
+        };
+    }
+
+    return null;
 }
 
 function parseKlineMessage(raw) {
@@ -248,6 +319,115 @@ function stopKlineStream({ symbol, interval }) {
     } catch { }
 
     klineStreams.delete(key);
+}
+
+async function publishMarketDetailSnapshot({ pub, symbol }) {
+    const [book, trades] = await Promise.all([
+        binanceClient.fetchOrderBook({ symbol, limit: 20 }),
+        binanceClient.fetchRecentAggTrades({ symbol, limit: 30 }),
+    ]);
+
+    await pub.publish(MARKET_DETAIL_CHANNEL, JSON.stringify({
+        type: "ORDER_BOOK_SNAPSHOT",
+        ts: Date.now(),
+        symbol: book.symbol,
+        lastUpdateId: book.lastUpdateId,
+        bids: book.bids,
+        asks: book.asks,
+        source: "REST",
+    }));
+
+    await pub.publish(MARKET_DETAIL_CHANNEL, JSON.stringify({
+        type: "TRADE_TAPE_UPDATE",
+        ts: Date.now(),
+        symbol: trades.symbol,
+        trades: trades.trades,
+        source: "REST",
+    }));
+}
+
+function openMarketDetailWebSocket({ pub, symbol, entry }) {
+    const sym = String(symbol || "").toUpperCase();
+    const wsUrl = buildMarketDetailWsUrl(sym);
+    console.log("[execution] market detail stream connecting:", { symbol: sym, wsUrl });
+
+    const ws = new WebSocket(wsUrl);
+    entry.ws = ws;
+
+    ws.on("open", () => {
+        console.log("[execution] market detail stream connected", { symbol: sym });
+    });
+
+    ws.on("error", (err) => {
+        console.error("[execution] market detail stream error", { symbol: sym, err: err?.message || err });
+    });
+
+    ws.on("close", (code, reason) => {
+        console.warn("[execution] market detail stream closed", { symbol: sym, code, reason: String(reason || "") });
+        if (entry.closedByRequest || entry.refCount <= 0 || marketDetailStreams.get(sym) !== entry) {
+            marketDetailStreams.delete(sym);
+            return;
+        }
+
+        entry.ws = null;
+        entry.reconnectTimer = setTimeout(() => {
+            if (entry.closedByRequest || entry.refCount <= 0 || marketDetailStreams.get(sym) !== entry) return;
+            openMarketDetailWebSocket({ pub, symbol: sym, entry });
+        }, 1500);
+    });
+
+    ws.on("message", async (raw) => {
+        const event = parseMarketDetailMessage(raw);
+        if (!event) return;
+
+        try {
+            await pub.publish(MARKET_DETAIL_CHANNEL, JSON.stringify(event));
+        } catch (e) {
+            console.warn("[execution] failed to publish market detail update", e?.message || e);
+        }
+    });
+}
+
+function startMarketDetailStream({ pub, symbol }) {
+    const sym = String(symbol || "").toUpperCase();
+    if (!sym) return;
+
+    const existing = marketDetailStreams.get(sym);
+    if (existing) {
+        existing.refCount += 1;
+        return;
+    }
+
+    const entry = {
+        ws: null,
+        refCount: 1,
+        createdAt: Date.now(),
+        closedByRequest: false,
+        reconnectTimer: null,
+    };
+    marketDetailStreams.set(sym, entry);
+    openMarketDetailWebSocket({ pub, symbol: sym, entry });
+}
+
+function stopMarketDetailStream({ symbol }) {
+    const sym = String(symbol || "").toUpperCase();
+    const entry = marketDetailStreams.get(sym);
+    if (!entry) return;
+
+    entry.refCount -= 1;
+    if (entry.refCount > 0) return;
+
+    entry.closedByRequest = true;
+    if (entry.reconnectTimer) {
+        clearTimeout(entry.reconnectTimer);
+        entry.reconnectTimer = null;
+    }
+
+    try {
+        entry.ws?.close();
+    } catch { }
+
+    marketDetailStreams.delete(sym);
 }
 
 // Very short-lived cache to avoid hammering /api/v3/account
@@ -686,6 +866,7 @@ async function main() {
     console.log(`[execution] subscribing: ${SYMBOL_REQ_CHANNEL}`);
     console.log(`[execution] subscribing: ${ACCOUNT_REQ_CHANNEL}`);
     console.log(`[execution] subscribing: ${CHART_REQ_CHANNEL}`);
+    console.log(`[execution] subscribing: ${MARKET_REQ_CHANNEL}`);
 
     await sub.subscribe(CHART_REQ_CHANNEL, async (message) => {
         let req;
@@ -715,6 +896,29 @@ async function main() {
             console.warn("[execution] failed to fetch/publish kline snapshot", { symbol, interval, err: e?.message || e });
         }
         startKlineStream({ pub, symbol, interval });
+    });
+
+    await sub.subscribe(MARKET_REQ_CHANNEL, async (message) => {
+        let req;
+        try { req = JSON.parse(message); } catch { return; }
+        const type = String(req?.type || "").toUpperCase();
+        const symbol = String(req?.symbol || "").toUpperCase();
+        if (!symbol) return;
+
+        if (type === "MARKET_DETAIL_UNSUBSCRIBE") {
+            stopMarketDetailStream({ symbol });
+            return;
+        }
+
+        if (type !== "MARKET_DETAIL_SUBSCRIBE") return;
+
+        try {
+            await publishMarketDetailSnapshot({ pub, symbol });
+        } catch (e) {
+            console.warn("[execution] failed to fetch/publish market detail snapshot", { symbol, err: e?.message || e });
+        }
+
+        startMarketDetailStream({ pub, symbol });
     });
 
     await sub.subscribe(SYMBOL_REQ_CHANNEL, async (message) => {
@@ -799,7 +1003,13 @@ async function main() {
         if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
         binanceSocket = new WebSocket(wsUrl);
         binanceSocket.on("open", () => console.log("[execution] market stream connected"));
-        binanceSocket.on("close", () => { wsReconnectTimer = setTimeout(startBinanceWs, 1500); });
+        binanceSocket.on("error", (err) => {
+            console.error("[execution] market stream error", { err: err?.message || err });
+        });
+        binanceSocket.on("close", (code, reason) => {
+            console.warn("[execution] market stream closed", { code, reason: String(reason || "") });
+            wsReconnectTimer = setTimeout(startBinanceWs, 1500);
+        });
         binanceSocket.on("message", async (raw) => {
             try {
                 const parsed = JSON.parse(raw.toString());

@@ -193,6 +193,40 @@ export class BinanceSpotTestnetClient {
         }, metadata);
     }
 
+    async fetchOrderBook({ symbol, limit = 20 } = {}) {
+        const sym = normalizeSymbol(symbol);
+        const lim = normalizeDepthLimit(limit);
+        const { data, metadata } = await this.request({
+            method: "GET",
+            path: "/api/v3/depth",
+            params: { symbol: sym, limit: lim },
+        });
+
+        return attachMetadata({
+            symbol: sym,
+            lastUpdateId: data?.lastUpdateId ?? null,
+            bids: normalizeBookLevels(data?.bids),
+            asks: normalizeBookLevels(data?.asks),
+        }, metadata);
+    }
+
+    async fetchRecentAggTrades({ symbol, limit = 30 } = {}) {
+        const sym = normalizeSymbol(symbol);
+        const lim = Math.max(1, Math.min(Number(limit) || 30, 1000));
+        const { data, metadata } = await this.request({
+            method: "GET",
+            path: "/api/v3/aggTrades",
+            params: { symbol: sym, limit: lim },
+        });
+
+        if (!Array.isArray(data)) {
+            throw new Error("aggTrades response is not an array");
+        }
+
+        const trades = data.map((trade) => normalizeAggTrade(trade)).filter(Boolean);
+        return attachMetadata({ symbol: sym, trades }, metadata);
+    }
+
     async getAccount({ apiKey, secretKey } = {}) {
         const { data } = await this.signedGet({
             path: "/api/v3/account",
@@ -683,6 +717,41 @@ function normalizeLimit(value) {
     const normalized = Number(value);
     if (!Number.isInteger(normalized)) return 500;
     return Math.max(1, Math.min(normalized, 1000));
+}
+
+function normalizeDepthLimit(value) {
+    const requested = Number(value);
+    if (!Number.isFinite(requested)) return 20;
+    const allowed = [5, 10, 20, 50, 100, 500, 1000];
+    return allowed.find((limit) => requested <= limit) || 1000;
+}
+
+function normalizeBookLevels(levels) {
+    if (!Array.isArray(levels)) return [];
+    return levels
+        .map((level) => {
+            if (!Array.isArray(level) || level.length < 2) return null;
+            const price = String(level[0] ?? "");
+            const quantity = String(level[1] ?? "");
+            if (!price || !quantity) return null;
+            return [price, quantity];
+        })
+        .filter(Boolean);
+}
+
+function normalizeAggTrade(trade) {
+    if (!trade || typeof trade !== "object") return null;
+    const price = String(trade.p ?? "");
+    const quantity = String(trade.q ?? "");
+    const ts = Number(trade.T ?? trade.E ?? Date.now());
+    if (!price || !quantity || !Number.isFinite(ts)) return null;
+    return {
+        id: String(trade.a ?? trade.t ?? `${ts}-${price}-${quantity}`),
+        price,
+        quantity,
+        side: trade.m ? "SELL" : "BUY",
+        ts,
+    };
 }
 
 function normalizeSymbol(value) {

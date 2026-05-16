@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { z } from "zod";
@@ -21,6 +21,7 @@ const PRICE_CHANNEL = DEFAULT_REALTIME_CHANNELS.prices;
 const ORDER_STATUS_CHANNEL = DEFAULT_REALTIME_CHANNELS.orders;
 const ACCOUNT_BALANCES_CHANNEL = DEFAULT_REALTIME_CHANNELS.balances;
 const CHARTS_CHANNEL = DEFAULT_REALTIME_CHANNELS.charts;
+const MARKET_DETAIL_CHANNEL = DEFAULT_REALTIME_CHANNELS.marketDetails || "events:market:details";
 const ADVANCED_ORDERS_ENABLED = process.env.NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS !== "false";
 const ORDER_TYPE_TABS = ADVANCED_ORDERS_ENABLED
     ? Object.freeze([...BASIC_ORDER_TYPES, ...ADVANCED_ORDER_TYPES])
@@ -42,6 +43,7 @@ const MOBILE_TERMINAL_SECTIONS = Object.freeze([
     ["#order-ticket", "Trade"],
     ["#account-balances", "Assets"],
     ["#price-chart", "Chart"],
+    ["#market-depth", "Book"],
     ["#terminal-activity", "Activity"],
 ]);
 
@@ -103,6 +105,10 @@ export default function TradePage() {
     const [balancesLoading, setBalancesLoading] = useState(false);
     const [balancesError, setBalancesError] = useState("");
     const [balancesUpdatedAt, setBalancesUpdatedAt] = useState(null);
+
+    const [orderBook, setOrderBook] = useState({ symbol: "BTCUSDT", bids: [], asks: [], ts: null, status: "idle" });
+    const [tradeTape, setTradeTape] = useState([]);
+    const [marketDetailError, setMarketDetailError] = useState("");
 
     // marketBoard: { BTCUSDT: { price, ts }, ETHUSDT: { ... } }
     const [marketBoard, setMarketBoard] = useState({});
@@ -444,6 +450,49 @@ export default function TradePage() {
                             setBalancesError("");
                         }
                         return;
+                    }
+
+                    if (channel === MARKET_DETAIL_CHANNEL) {
+                        const sym = String(inner?.symbol || "").toUpperCase();
+                        if (!sym || sym !== String(selectedSymbolRef.current).toUpperCase()) return;
+
+                        if ((inner?.type === "ORDER_BOOK_SNAPSHOT" || inner?.type === "ORDER_BOOK_UPDATE") && Array.isArray(inner?.bids) && Array.isArray(inner?.asks)) {
+                            setOrderBook({
+                                symbol: sym,
+                                bids: inner.bids.slice(0, 20),
+                                asks: inner.asks.slice(0, 20),
+                                ts: inner.ts || outer.ts || Date.now(),
+                                status: "ready",
+                            });
+                            setMarketDetailError("");
+                            return;
+                        }
+
+                        if (inner?.type === "TRADE_TAPE_UPDATE" && Array.isArray(inner?.trades)) {
+                            setTradeTape((prev) => {
+                                const incoming = inner.trades
+                                    .map((trade) => ({
+                                        id: String(trade.id ?? `${trade.ts}-${trade.price}-${trade.quantity}`),
+                                        price: String(trade.price ?? ""),
+                                        quantity: String(trade.quantity ?? ""),
+                                        side: String(trade.side || "").toUpperCase(),
+                                        ts: Number(trade.ts || inner.ts || outer.ts || Date.now()),
+                                    }))
+                                    .filter((trade) => trade.price && trade.quantity);
+
+                                const seen = new Set();
+                                return [...incoming, ...prev]
+                                    .filter((trade) => {
+                                        const key = `${sym}:${trade.id}`;
+                                        if (seen.has(key)) return false;
+                                        seen.add(key);
+                                        return true;
+                                    })
+                                    .slice(0, 50);
+                            });
+                            setMarketDetailError("");
+                            return;
+                        }
                     }
 
                     if (channel === CHARTS_CHANNEL) {
@@ -997,7 +1046,7 @@ export default function TradePage() {
         }
     }
 
-    async function subscribeChart(symbol, interval) {
+    const subscribeChart = useCallback(async function subscribeChart(symbol, interval) {
         try {
             await fetch(`${eventBaseUrl}/charts/subscribe`, {
                 method: "POST",
@@ -1010,7 +1059,21 @@ export default function TradePage() {
         } catch {
             // ignore
         }
-    }
+    }, [eventBaseUrl]);
+
+    const requestMarketDetails = useCallback(async function requestMarketDetails(symbol, action = "subscribe") {
+        const res = await fetch(`${eventBaseUrl}/market/${action}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                symbol: String(symbol || "").toUpperCase(),
+            }),
+        });
+
+        if (!res.ok) {
+            throw new Error(`Market stream request failed (${res.status})`);
+        }
+    }, [eventBaseUrl]);
 
     const isDark = theme === "dark";
 
@@ -1125,7 +1188,21 @@ export default function TradePage() {
         try {
             candleSeriesRef.current?.setData([]);
         } catch { }
-    }, [selectedSymbol, chartInterval]);
+    }, [selectedSymbol, chartInterval, subscribeChart]);
+
+    useEffect(() => {
+        if (!authReady) return;
+        const symbol = String(selectedSymbol || "").toUpperCase();
+        setOrderBook({ symbol, bids: [], asks: [], ts: null, status: "loading" });
+        setTradeTape([]);
+        setMarketDetailError("");
+        requestMarketDetails(symbol, "subscribe")
+            .catch(() => setMarketDetailError("Market depth stream unavailable"));
+
+        return () => {
+            requestMarketDetails(symbol, "unsubscribe").catch(() => {});
+        };
+    }, [authReady, selectedSymbol, requestMarketDetails]);
 
     async function placeOrder() {
         setApiMsg("");
@@ -1750,6 +1827,13 @@ export default function TradePage() {
                             </div>
                         </ChartPanel>
 
+                        <MarketMicrostructurePanel
+                            error={marketDetailError}
+                            orderBook={orderBook}
+                            selectedSymbol={selectedSymbol}
+                            tradeTape={tradeTape}
+                        />
+
                         {/* Tabs & Table Section */}
                         <ActivityPanel>
                             {/* Header: Flex col on mobile, row on desktop to prevent squashing */}
@@ -1945,6 +2029,15 @@ function MobileTerminalNav() {
     );
 }
 
+function formatPriceValue(value) {
+    if (!Number.isFinite(Number(value))) return "—";
+    return Number(value).toFixed(6).replace(/\.?0+$/, "");
+}
+
+function trimNumericZeros(value) {
+    return String(value).replace(/\.?0+$/, "");
+}
+
 function TerminalPanel({ id, className = "", children }) {
     return (
         <section id={id} className={`${TC.panel} scroll-mt-20 ${className}`}>
@@ -1985,6 +2078,106 @@ function ActivityPanel({ children }) {
     );
 }
 
+function MarketMicrostructurePanel({ error, orderBook, selectedSymbol, tradeTape }) {
+    const spread = calculateSpread(orderBook?.bids?.[0]?.[0], orderBook?.asks?.[0]?.[0]);
+
+    return (
+        <TerminalPanel id="market-depth" className="overflow-hidden">
+            <div className="flex flex-col gap-3 border-b border-neutral-100 p-4 dark:border-white/5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h3 className="text-sm font-semibold tracking-tight">Order Book & Tape</h3>
+                    <div className={`mt-1 text-xs ${TC.text.muted}`}>
+                        {selectedSymbol} {spread ? `spread ${spread}` : "waiting for depth"}
+                    </div>
+                </div>
+                <div className={`text-xs ${orderBook?.status === "ready" ? TC.tone.success : TC.tone.warning}`}>
+                    {orderBook?.status === "ready" ? "Live depth" : "Loading"}
+                </div>
+            </div>
+
+            {error && <div className={`px-4 pt-3 text-xs ${TC.tone.danger}`}>{error}</div>}
+
+            <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.7fr)]">
+                <OrderBookView asks={orderBook?.asks || []} bids={orderBook?.bids || []} />
+                <TradeTapeView trades={tradeTape} />
+            </div>
+        </TerminalPanel>
+    );
+}
+
+function OrderBookView({ asks, bids }) {
+    const topAsks = asks.slice(0, 10).reverse();
+    const topBids = bids.slice(0, 10);
+
+    return (
+        <div className="min-w-0 border-b border-neutral-100 p-4 dark:border-white/5 lg:border-b-0 lg:border-r">
+            <div className={`grid grid-cols-3 pb-2 text-[11px] font-medium uppercase ${TC.text.muted}`}>
+                <span>Price</span>
+                <span className="text-right">Size</span>
+                <span className="text-right">Total</span>
+            </div>
+            <div className="space-y-1">
+                {topAsks.length === 0 ? (
+                    <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for asks</div>
+                ) : topAsks.map(([price, quantity]) => (
+                    <BookLevelRow key={`ask-${price}-${quantity}`} price={price} quantity={quantity} side="SELL" />
+                ))}
+            </div>
+            <div className="my-2 h-px bg-neutral-100 dark:bg-white/5" />
+            <div className="space-y-1">
+                {topBids.length === 0 ? (
+                    <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for bids</div>
+                ) : topBids.map(([price, quantity]) => (
+                    <BookLevelRow key={`bid-${price}-${quantity}`} price={price} quantity={quantity} side="BUY" />
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function BookLevelRow({ price, quantity, side }) {
+    const total = Number(price) * Number(quantity);
+    return (
+        <div className="grid grid-cols-3 items-center text-xs">
+            <span className={`font-mono ${side === "BUY" ? TC.tone.success : TC.tone.danger}`}>{formatPriceValue(price)}</span>
+            <span className="text-right font-mono text-neutral-500">{trimNumericZeros(Number(quantity).toFixed(6))}</span>
+            <span className="text-right font-mono text-neutral-500">{Number.isFinite(total) ? formatPriceValue(total) : "—"}</span>
+        </div>
+    );
+}
+
+function TradeTapeView({ trades }) {
+    return (
+        <div className="min-w-0 p-4">
+            <div className={`grid grid-cols-3 pb-2 text-[11px] font-medium uppercase ${TC.text.muted}`}>
+                <span>Price</span>
+                <span className="text-right">Size</span>
+                <span className="text-right">Time</span>
+            </div>
+            <div className="max-h-[280px] space-y-1 overflow-auto pr-1">
+                {trades.length === 0 ? (
+                    <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for trades</div>
+                ) : trades.slice(0, 30).map((trade) => (
+                    <div key={`${trade.id}-${trade.ts}`} className="grid grid-cols-3 items-center text-xs">
+                        <span className={`font-mono ${trade.side === "SELL" ? TC.tone.danger : TC.tone.success}`}>{formatPriceValue(trade.price)}</span>
+                        <span className="text-right font-mono text-neutral-500">{trimNumericZeros(Number(trade.quantity).toFixed(6))}</span>
+                        <span className="text-right text-[11px] text-neutral-500">{Number.isFinite(trade.ts) ? new Date(trade.ts).toLocaleTimeString() : "—"}</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function calculateSpread(bestBid, bestAsk) {
+    const bid = Number(bestBid);
+    const ask = Number(bestAsk);
+    if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask <= 0) return "";
+    const spread = ask - bid;
+    const spreadBps = (spread / ask) * 10000;
+    return `${formatPriceValue(spread)} (${trimNumericZeros(spreadBps.toFixed(2))} bps)`;
+}
+
 function PositionsTableRows({ marketBoard, positionsError, positionsLoading, positionsPage, onSelectSymbol }) {
     if (positionsLoading) {
         return <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">Loading positions...</td></tr>;
@@ -2009,11 +2202,11 @@ function PositionsTableRows({ marketBoard, positionsError, positionsLoading, pos
         return (
             <tr key={position.id || sym} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
                 <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(sym)}>{sym}</td>
-                <td className="px-5 py-3 font-mono text-neutral-500">{trimZeros(qtyNum.toFixed(6))}</td>
-                <td className="px-5 py-3 font-mono">{trimZeros(entry.toFixed(6))}</td>
-                <td className="px-5 py-3 font-mono">{formatPrice(mark)}</td>
-                <td className={`px-5 py-3 font-mono ${realized >= 0 ? TC.tone.success : TC.tone.danger}`}>{realized > 0 && "+"}{trimZeros(realized.toFixed(4))}</td>
-                <td className={`px-5 py-3 font-mono ${unrealized >= 0 ? TC.tone.success : TC.tone.danger}`}>{unrealized > 0 && "+"}{trimZeros(unrealized.toFixed(4))}</td>
+                <td className="px-5 py-3 font-mono text-neutral-500">{trimNumericZeros(qtyNum.toFixed(6))}</td>
+                <td className="px-5 py-3 font-mono">{trimNumericZeros(entry.toFixed(6))}</td>
+                <td className="px-5 py-3 font-mono">{formatPriceValue(mark)}</td>
+                <td className={`px-5 py-3 font-mono ${realized >= 0 ? TC.tone.success : TC.tone.danger}`}>{realized > 0 && "+"}{trimNumericZeros(realized.toFixed(4))}</td>
+                <td className={`px-5 py-3 font-mono ${unrealized >= 0 ? TC.tone.success : TC.tone.danger}`}>{unrealized > 0 && "+"}{trimNumericZeros(unrealized.toFixed(4))}</td>
             </tr>
         );
     });
@@ -2068,7 +2261,7 @@ function MarketBoardRows({ pinned, shown, togglePin, onSelectSymbol }) {
                 </button>
             </td>
             <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(sym)}>{sym}</td>
-            <td className="px-5 py-3 font-mono">{formatPrice(value.price)}</td>
+            <td className="px-5 py-3 font-mono">{formatPriceValue(value.price)}</td>
             <td className="px-5 py-3 text-xs text-neutral-500 tabular-nums">{value.ts ? new Date(value.ts).toLocaleTimeString() : "-"}</td>
         </tr>
     ));

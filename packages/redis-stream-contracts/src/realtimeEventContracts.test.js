@@ -103,6 +103,29 @@ test("validates market, chart, symbol, and account RPC payloads", () => {
         kline: { open: "1", high: "2", low: "1", close: "2", isFinal: false },
     }), []);
 
+    assert.deepEqual(validateRealtimeChannelPayload(REALTIME_CHANNELS.marketRequest, {
+        type: REALTIME_EVENT_TYPES.marketDetailSubscribe,
+        id: "market-1",
+        symbol: "BTCUSDT",
+    }), []);
+
+    assert.deepEqual(validateRealtimeChannelPayload(REALTIME_CHANNELS.marketDetails, {
+        type: REALTIME_EVENT_TYPES.orderBookSnapshot,
+        ts: 1778880000000,
+        symbol: "BTCUSDT",
+        lastUpdateId: 123,
+        bids: [["65000.00", "0.12"]],
+        asks: [["65001.00", "0.08"]],
+        source: "REST",
+    }), []);
+
+    assert.deepEqual(validateRealtimeChannelPayload(REALTIME_CHANNELS.marketDetails, {
+        type: REALTIME_EVENT_TYPES.tradeTapeUpdate,
+        ts: 1778880000000,
+        symbol: "BTCUSDT",
+        trades: [{ id: "1", price: "65000.00", quantity: "0.01", side: "BUY", ts: 1778880000000 }],
+    }), []);
+
     assert.deepEqual(validateRealtimeChannelPayload(REALTIME_CHANNELS.symbolRequest, {
         type: REALTIME_EVENT_TYPES.symbolInfoRequest,
         id: "symbol-1",

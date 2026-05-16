@@ -124,6 +124,8 @@ export const config = Object.freeze({
     balancesChannel: readEnv("BALANCES_CHANNEL", "events:account:balances"),
     chartReqChannel: readEnv("CHART_REQ_CHANNEL", "events:chart:request"),
     chartsChannel: readEnv("CHARTS_CHANNEL", "events:chart:update"),
+    marketReqChannel: readEnv("MARKET_REQ_CHANNEL", "events:market:request"),
+    marketDetailChannel: readEnv("MARKET_DETAIL_CHANNEL", "events:market:details"),
     accountReqChannel: readEnv("ACCOUNT_REQ_CHANNEL", "events:account:request"),
     accountResChannel: readEnv("ACCOUNT_RES_CHANNEL", "events:account:response"),
     accountCacheMs,
@@ -149,6 +151,8 @@ export function logStartupConfig() {
         pricesChannel: config.pricesChannel,
         balancesChannel: config.balancesChannel,
         chartsChannel: config.chartsChannel,
+        marketReqChannel: config.marketReqChannel,
+        marketDetailChannel: config.marketDetailChannel,
         accountCacheMs: config.accountCacheMs,
         symbolCacheMs: config.symbolCacheMs,
     });

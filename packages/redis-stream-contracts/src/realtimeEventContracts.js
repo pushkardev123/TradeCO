@@ -4,6 +4,8 @@ export const REALTIME_CHANNELS = Object.freeze({
     balances: "events:account:balances",
     chartsRequest: "events:chart:request",
     charts: "events:chart:update",
+    marketRequest: "events:market:request",
+    marketDetails: "events:market:details",
     accountRequest: "events:account:request",
     accountResponse: "events:account:response",
     symbolRequest: "events:symbol:request",
@@ -29,6 +31,11 @@ export const REALTIME_EVENT_TYPES = Object.freeze({
     klineUpdate: "KLINE_UPDATE",
     chartSubscribe: "CHART_SUBSCRIBE",
     chartUnsubscribe: "CHART_UNSUBSCRIBE",
+    marketDetailSubscribe: "MARKET_DETAIL_SUBSCRIBE",
+    marketDetailUnsubscribe: "MARKET_DETAIL_UNSUBSCRIBE",
+    orderBookSnapshot: "ORDER_BOOK_SNAPSHOT",
+    orderBookUpdate: "ORDER_BOOK_UPDATE",
+    tradeTapeUpdate: "TRADE_TAPE_UPDATE",
 });
 
 const ORDER_STATUSES = new Set([
@@ -91,6 +98,12 @@ export function validateRealtimeChannelPayload(channel, payload, options = {}) {
         case "charts":
             validateChartEvent(payload, errors);
             break;
+        case "marketRequest":
+            validateMarketDetailRequest(payload, errors);
+            break;
+        case "marketDetails":
+            validateMarketDetailEvent(payload, errors);
+            break;
         default:
             errors.push(`unsupported realtime channel: ${channel || "<empty>"}`);
     }
@@ -134,6 +147,8 @@ export function getRealtimeChannelConfig(env = process.env) {
         balances: readOptionalEnv(env, "BALANCES_CHANNEL") || REALTIME_CHANNELS.balances,
         chartsRequest: readOptionalEnv(env, "CHART_REQ_CHANNEL") || REALTIME_CHANNELS.chartsRequest,
         charts: readOptionalEnv(env, "CHARTS_CHANNEL") || REALTIME_CHANNELS.charts,
+        marketRequest: readOptionalEnv(env, "MARKET_REQ_CHANNEL") || REALTIME_CHANNELS.marketRequest,
+        marketDetails: readOptionalEnv(env, "MARKET_DETAIL_CHANNEL") || REALTIME_CHANNELS.marketDetails,
         accountRequest: readOptionalEnv(env, "ACCOUNT_REQ_CHANNEL") || REALTIME_CHANNELS.accountRequest,
         accountResponse: readOptionalEnv(env, "ACCOUNT_RES_CHANNEL") || REALTIME_CHANNELS.accountResponse,
         symbolRequest: readOptionalEnv(env, "SYMBOL_REQ_CHANNEL") || REALTIME_CHANNELS.symbolRequest,
@@ -274,6 +289,62 @@ function validateChartEvent(payload, errors) {
     }
 
     errors.push(`type must be ${REALTIME_EVENT_TYPES.klineSnapshot} or ${REALTIME_EVENT_TYPES.klineUpdate}`);
+}
+
+function validateMarketDetailRequest(payload, errors) {
+    if (payload.type !== REALTIME_EVENT_TYPES.marketDetailSubscribe && payload.type !== REALTIME_EVENT_TYPES.marketDetailUnsubscribe) {
+        errors.push(`type must be ${REALTIME_EVENT_TYPES.marketDetailSubscribe} or ${REALTIME_EVENT_TYPES.marketDetailUnsubscribe}`);
+    }
+    requireNonEmptyString(payload.id, "id", errors);
+    requireNonEmptyString(payload.symbol, "symbol", errors);
+}
+
+function validateMarketDetailEvent(payload, errors) {
+    if (payload.type === REALTIME_EVENT_TYPES.orderBookSnapshot || payload.type === REALTIME_EVENT_TYPES.orderBookUpdate) {
+        requireNonEmptyString(payload.symbol, "symbol", errors);
+        requireFiniteNumber(payload.ts, "ts", errors);
+        requireBookLevels(payload.bids, "bids", errors);
+        requireBookLevels(payload.asks, "asks", errors);
+        return;
+    }
+
+    if (payload.type === REALTIME_EVENT_TYPES.tradeTapeUpdate) {
+        requireNonEmptyString(payload.symbol, "symbol", errors);
+        requireFiniteNumber(payload.ts, "ts", errors);
+        if (!Array.isArray(payload.trades)) {
+            errors.push("trades must be an array");
+            return;
+        }
+        payload.trades.forEach((trade, index) => {
+            if (!isPlainObject(trade)) {
+                errors.push(`trades[${index}] must be an object`);
+                return;
+            }
+            requireNonEmptyString(String(trade.id ?? ""), `trades[${index}].id`, errors);
+            requireDecimalString(trade.price, `trades[${index}].price`, errors);
+            requireDecimalString(trade.quantity, `trades[${index}].quantity`, errors);
+            requireFiniteNumber(trade.ts, `trades[${index}].ts`, errors);
+            if (trade.side !== undefined) requireOneOf(trade.side, SIDES, `trades[${index}].side`, errors);
+        });
+        return;
+    }
+
+    errors.push(`type must be ${REALTIME_EVENT_TYPES.orderBookSnapshot}, ${REALTIME_EVENT_TYPES.orderBookUpdate}, or ${REALTIME_EVENT_TYPES.tradeTapeUpdate}`);
+}
+
+function requireBookLevels(levels, fieldName, errors) {
+    if (!Array.isArray(levels)) {
+        errors.push(`${fieldName} must be an array`);
+        return;
+    }
+    levels.forEach((level, index) => {
+        if (!Array.isArray(level) || level.length < 2) {
+            errors.push(`${fieldName}[${index}] must be [price, quantity]`);
+            return;
+        }
+        requireDecimalString(level[0], `${fieldName}[${index}][0]`, errors);
+        requireDecimalString(level[1], `${fieldName}[${index}][1]`, errors);
+    });
 }
 
 function requireNonEmptyString(value, fieldName, errors) {

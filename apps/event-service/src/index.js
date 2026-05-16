@@ -28,6 +28,8 @@ const JWT_SECRET = config.jwtSecret;
 // Charts (candlesticks / klines)
 const CHART_REQ_CHANNEL = config.chartReqChannel;
 const CHARTS_CHANNEL = config.chartsChannel;
+const MARKET_REQ_CHANNEL = config.marketReqChannel;
+const MARKET_DETAIL_CHANNEL = config.marketDetailChannel;
 
 // Account info RPC (event-service -> execution-service)
 const ACCOUNT_REQ_CHANNEL = config.accountReqChannel;
@@ -244,6 +246,8 @@ const server = http.createServer(async (req, res) => {
                 balancesChannel: BALANCES_CHANNEL,
                 chartReqChannel: CHART_REQ_CHANNEL,
                 chartsChannel: CHARTS_CHANNEL,
+                marketReqChannel: MARKET_REQ_CHANNEL,
+                marketDetailChannel: MARKET_DETAIL_CHANNEL,
                 accountReqChannel: ACCOUNT_REQ_CHANNEL,
                 accountResChannel: ACCOUNT_RES_CHANNEL,
                 accountCacheMs: ACCOUNT_CACHE_MS,
@@ -368,6 +372,62 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
+    if (req.url === "/market/subscribe" && req.method === "POST") {
+        try {
+            const body = await readJson(req);
+            const symbol = String(body?.symbol || "").toUpperCase();
+
+            if (!symbol) {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                return res.end(JSON.stringify({ ok: false, error: "symbol is required" }));
+            }
+            if (!redisPub) {
+                res.writeHead(503, { "Content-Type": "application/json" });
+                return res.end(JSON.stringify({ ok: false, error: "redis publisher not ready" }));
+            }
+
+            const id = `market-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const msg = { type: "MARKET_DETAIL_SUBSCRIBE", id, symbol, ts: Date.now() };
+
+            await redisPub.publish(MARKET_REQ_CHANNEL, JSON.stringify(msg));
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ ok: true, publishedTo: MARKET_REQ_CHANNEL, request: msg }));
+        } catch (e) {
+            console.error("[event-service] /market/subscribe error:", e);
+            res.writeHead(500, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ ok: false, error: "internal error" }));
+        }
+    }
+
+    if (req.url === "/market/unsubscribe" && req.method === "POST") {
+        try {
+            const body = await readJson(req);
+            const symbol = String(body?.symbol || "").toUpperCase();
+
+            if (!symbol) {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                return res.end(JSON.stringify({ ok: false, error: "symbol is required" }));
+            }
+            if (!redisPub) {
+                res.writeHead(503, { "Content-Type": "application/json" });
+                return res.end(JSON.stringify({ ok: false, error: "redis publisher not ready" }));
+            }
+
+            const id = `market-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const msg = { type: "MARKET_DETAIL_UNSUBSCRIBE", id, symbol, ts: Date.now() };
+
+            await redisPub.publish(MARKET_REQ_CHANNEL, JSON.stringify(msg));
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ ok: true, publishedTo: MARKET_REQ_CHANNEL, request: msg }));
+        } catch (e) {
+            console.error("[event-service] /market/unsubscribe error:", e);
+            res.writeHead(500, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ ok: false, error: "internal error" }));
+        }
+    }
+
     // Order submission belongs to the authenticated backend command gateway.
     // Do not accept client-supplied userId or order ingress in the realtime service.
     if (req.url === "/orders" && req.method === "POST") {
@@ -435,6 +495,8 @@ wss.on("connection", (ws) => {
                 balances: BALANCES_CHANNEL,
                 chartsRequest: CHART_REQ_CHANNEL,
                 charts: CHARTS_CHANNEL,
+                marketRequest: MARKET_REQ_CHANNEL,
+                marketDetails: MARKET_DETAIL_CHANNEL,
                 symbolRequest: SYMBOL_REQ_CHANNEL,
                 symbolResponse: SYMBOL_RES_CHANNEL,
             },
@@ -499,6 +561,7 @@ async function startRedisSubscriber() {
     await sub.subscribe(EVENTS_CHANNEL, (message) => forward(EVENTS_CHANNEL, message));
     await sub.subscribe(PRICES_CHANNEL, (message) => forward(PRICES_CHANNEL, message));
     await sub.subscribe(CHARTS_CHANNEL, (message) => forward(CHARTS_CHANNEL, message));
+    await sub.subscribe(MARKET_DETAIL_CHANNEL, (message) => forward(MARKET_DETAIL_CHANNEL, message));
     await sub.subscribe(BALANCES_CHANNEL, (message) => forward(BALANCES_CHANNEL, message));
     await sub.subscribe(SYMBOL_RES_CHANNEL, (message) => {
         try {

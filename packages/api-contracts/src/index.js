@@ -26,6 +26,8 @@ export const DEFAULT_REALTIME_CHANNELS = Object.freeze({
     prices: "events:price:update",
     balances: "events:account:balances",
     charts: "events:chart:update",
+    marketRequest: "events:market:request",
+    marketDetails: "events:market:details",
     accountRequest: "events:account:request",
     accountResponse: "events:account:response",
     symbolRequest: "events:symbol:request",

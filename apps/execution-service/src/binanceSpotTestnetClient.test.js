@@ -380,3 +380,38 @@ test("fetches symbol filters and average price from public testnet endpoints", a
     assert.equal(symbolInfo.minQty, "0.00010000");
     assert.equal(averagePrice.price, "65000.25");
 });
+
+test("fetches public order book and recent aggregate trades", async () => {
+    const { calls, transport } = createMockTransport([
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify({
+                lastUpdateId: 12345,
+                bids: [["65000.00", "0.12000000"]],
+                asks: [["65001.00", "0.08000000"]],
+            }),
+        },
+        {
+            statusCode: 200,
+            headers: {},
+            body: JSON.stringify([
+                { a: 1, p: "65000.00", q: "0.01000000", T: 1700000000000, m: false },
+                { a: 2, p: "64999.50", q: "0.02000000", T: 1700000000100, m: true },
+            ]),
+        },
+    ]);
+    const client = createBinanceSpotTestnetClient({ transport });
+
+    const book = await client.fetchOrderBook({ symbol: "btcusdt", limit: 30 });
+    const trades = await client.fetchRecentAggTrades({ symbol: "btcusdt", limit: 30 });
+
+    assert.equal(calls[0].url, "https://testnet.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=50");
+    assert.equal(calls[1].url, "https://testnet.binance.vision/api/v3/aggTrades?symbol=BTCUSDT&limit=30");
+    assert.equal(book.symbol, "BTCUSDT");
+    assert.equal(book.lastUpdateId, 12345);
+    assert.deepEqual(book.bids, [["65000.00", "0.12000000"]]);
+    assert.deepEqual(book.asks, [["65001.00", "0.08000000"]]);
+    assert.deepEqual(trades.trades.map((trade) => trade.side), ["BUY", "SELL"]);
+    assert.equal(trades.trades[0].price, "65000.00");
+});
