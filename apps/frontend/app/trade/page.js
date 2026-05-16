@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { z } from "zod";
@@ -9,11 +9,33 @@ import {
     CrosshairMode,
     CandlestickSeries,
 } from "lightweight-charts";
-import { ADVANCED_ORDER_TYPES, BASIC_ORDER_TYPES, DEFAULT_REALTIME_CHANNELS, TIME_IN_FORCE as TIME_IN_FORCE_OPTIONS } from "@tradeco/api-contracts";
+import { ADVANCED_ORDER_TYPES, BASIC_ORDER_TYPES, DEFAULT_REALTIME_CHANNELS, OPEN_ORDER_STATUSES, TIME_IN_FORCE as TIME_IN_FORCE_OPTIONS } from "@tradeco/api-contracts";
 import { TRADECO_WEB_CLASSES } from "@tradeco/brand-tokens";
 
 import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
 import { CgProfile } from "react-icons/cg";
+import {
+    FiActivity,
+    FiAlertTriangle,
+    FiArrowLeft,
+    FiArrowRight,
+    FiBarChart2,
+    FiBriefcase,
+    FiCheck,
+    FiChevronDown,
+    FiCopy,
+    FiInfo,
+    FiLayers,
+    FiList,
+    FiRefreshCw,
+    FiSearch,
+    FiShield,
+    FiShoppingCart,
+    FiStar,
+    FiTrash2,
+    FiX,
+    FiZap,
+} from "react-icons/fi";
 
 import { authFetch, bootstrapSession, clearAuth, ensureAccessToken } from "../lib/auth";
 
@@ -38,14 +60,10 @@ const ORDER_TYPE_LABELS = Object.freeze({
 const LIMIT_PRICE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT", "LIMIT_MAKER"]);
 const STOP_PRICE_ORDER_TYPES = new Set(["STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"]);
 const TIME_IN_FORCE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"]);
+const OPEN_ORDER_STATUS_SET = new Set(OPEN_ORDER_STATUSES);
+const FILL_READY_STATUSES = new Set(["PARTIALLY_FILLED", "FILLED"]);
+const ORDER_PERCENT_PRESETS = Object.freeze([25, 50, 75, 100]);
 const TC = TRADECO_WEB_CLASSES;
-const MOBILE_TERMINAL_SECTIONS = Object.freeze([
-    ["#order-ticket", "Trade"],
-    ["#account-balances", "Assets"],
-    ["#price-chart", "Chart"],
-    ["#market-depth", "Book"],
-    ["#terminal-activity", "Activity"],
-]);
 const CHART_VISIBLE_BARS = 120;
 
 export default function TradePage() {
@@ -62,6 +80,7 @@ export default function TradePage() {
     const [toast, setToast] = useState({ open: false, title: "", message: "", status: "" });
     const [authReady, setAuthReady] = useState(false);
     const [authUser, setAuthUser] = useState(null);
+    const [accountContext, setAccountContext] = useState(null);
 
     // orderId -> latest order status event
     const [ordersById, setOrdersById] = useState({});
@@ -82,6 +101,16 @@ export default function TradePage() {
 
     const [ordersLoading, setOrdersLoading] = useState(false);
     const [ordersError, setOrdersError] = useState("");
+    const [openOrders, setOpenOrders] = useState([]);
+    const [openOrdersLoading, setOpenOrdersLoading] = useState(false);
+    const [openOrdersError, setOpenOrdersError] = useState("");
+    const [ordersWorkspaceView, setOrdersWorkspaceView] = useState("open");
+    const [selectedOrderId, setSelectedOrderId] = useState(null);
+    const [orderDetail, setOrderDetail] = useState(null);
+    const [orderDetailEvents, setOrderDetailEvents] = useState([]);
+    const [orderDetailLoading, setOrderDetailLoading] = useState(false);
+    const [orderDetailError, setOrderDetailError] = useState("");
+    const [cancelingOrderId, setCancelingOrderId] = useState(null);
 
     // positions (paginated)
     const POSITIONS_PAGE_SIZE = 10;
@@ -129,6 +158,7 @@ export default function TradePage() {
         return "light";
     }); // 'light' | 'dark'
     const [activeTab, setActiveTab] = useState("trades"); // positions | orders | trades
+    const [mobileTradeOpen, setMobileTradeOpen] = useState(false);
     const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
     const [chartInterval, setChartInterval] = useState("1m"); // 1m | 5m | 1d | 1w
     const [chartStatus, setChartStatus] = useState("idle"); // idle | loading | waiting | ready | empty | error
@@ -205,6 +235,7 @@ export default function TradePage() {
             .then((context) => {
                 if (cancelled) return;
                 setAuthUser(context?.user || null);
+                setAccountContext(context || null);
                 setAuthReady(true);
             })
             .catch(() => {
@@ -220,6 +251,7 @@ export default function TradePage() {
     useEffect(() => {
         if (!authReady) return;
         fetchBalances();
+        fetchOpenOrders();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [authReady]);
 
@@ -229,6 +261,7 @@ export default function TradePage() {
         setReplayStatus("syncing");
         const jobs = [
             fetchBalances(),
+            fetchOpenOrders(),
             fetchOrdersPage(ordersCursorRef.current),
             fetchPositionsPage(positionsCursorRef.current),
         ];
@@ -584,6 +617,7 @@ export default function TradePage() {
     useEffect(() => {
         if (!authReady) return;
         if (activeTab === "orders") {
+            fetchOpenOrders();
             fetchOrdersPage(ordersCursor);
             return;
         }
@@ -593,6 +627,12 @@ export default function TradePage() {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [authReady, activeTab, ordersCursor, positionsCursor]);
+
+    useEffect(() => {
+        if (!authReady || !selectedOrderId) return;
+        fetchOrderDetail(selectedOrderId);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [authReady, selectedOrderId]);
 
     function handleAuthFailure(error) {
         if (error?.status !== 401) return false;
@@ -722,6 +762,63 @@ export default function TradePage() {
 
     function trimZeros(n) {
         return String(n).replace(/\.?0+$/, "");
+    }
+
+    function getBalance(asset) {
+        const target = String(asset || "").toUpperCase();
+        return balances.find((balance) => String(balance.asset || "").toUpperCase() === target) || {
+            asset: target,
+            free: "0",
+            locked: "0",
+        };
+    }
+
+    function safeFixed(value, decimals = 8) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "";
+        return trimZeros(n.toFixed(decimals));
+    }
+
+    function estimateOrderPrice() {
+        if (LIMIT_PRICE_ORDER_TYPES.has(orderType)) return asNumber(limitPrice);
+        if (STOP_PRICE_ORDER_TYPES.has(orderType) && !LIMIT_PRICE_ORDER_TYPES.has(orderType)) return asNumber(stopPrice);
+        return asNumber(currentPrice);
+    }
+
+    function handlePercentSize(percent) {
+        const pct = Number(percent) / 100;
+        if (!Number.isFinite(pct) || pct <= 0) return;
+
+        const price = estimateOrderPrice();
+        const baseAsset = selectedSymbol.replace(/USDT$/, "");
+        const quoteAsset = selectedSymbol.endsWith("USDT") ? "USDT" : "QUOTE";
+        const baseFree = asNumber(getBalance(baseAsset).free) || 0;
+        const quoteFree = asNumber(getBalance(quoteAsset).free) || 0;
+
+        setFormErrors((prev) => ({ ...prev, qty: undefined, quoteOrderQty: undefined, notional: undefined, balance: undefined }));
+
+        if (side === "SELL") {
+            const rawQty = baseFree * pct;
+            const snapped = symbolInfo?.stepSize ? roundToStep(rawQty, symbolInfo.stepSize) : rawQty;
+            if (snapped !== null && snapped > 0) setQty(safeFixed(snapped, 8));
+            setOrderSizingMode("BASE");
+            return;
+        }
+
+        const spendableQuote = quoteFree * pct;
+        if (orderType === "MARKET" && orderSizingMode === "QUOTE") {
+            setQuoteOrderQty(safeFixed(spendableQuote, 2));
+            return;
+        }
+
+        if (price && price > 0) {
+            const rawQty = spendableQuote / price;
+            const snapped = symbolInfo?.stepSize ? roundToStep(rawQty, symbolInfo.stepSize) : rawQty;
+            if (snapped !== null && snapped > 0) setQty(safeFixed(snapped, 8));
+        } else {
+            setQuoteOrderQty(safeFixed(spendableQuote, 2));
+            setOrderSizingMode("QUOTE");
+        }
     }
 
     function normalizeChartTime(value) {
@@ -997,6 +1094,163 @@ export default function TradePage() {
                     return;
                 }
             });
+    }
+
+    async function fetchOpenOrders(symbol = null) {
+        setOpenOrdersLoading(true);
+        setOpenOrdersError("");
+
+        try {
+            const qs = new URLSearchParams();
+            if (symbol) qs.set("symbol", String(symbol).toUpperCase());
+            const query = qs.toString();
+
+            const res = await authFetch(`${apiBaseUrl}/orders/open${query ? `?${query}` : ""}`, {
+                method: "GET",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                cache: "no-store",
+            });
+
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json?.ok === false) {
+                throw buildResponseError(json, res, `Failed to fetch open orders (${res.status})`);
+            }
+
+            const items = Array.isArray(json?.items)
+                ? json.items
+                : Array.isArray(json?.data)
+                    ? json.data
+                    : [];
+            setOpenOrders(items);
+        } catch (e) {
+            if (handleAuthFailure(e)) return;
+            setOpenOrders([]);
+            setOpenOrdersError(e?.message || "Failed to fetch open orders");
+        } finally {
+            setOpenOrdersLoading(false);
+        }
+    }
+
+    async function fetchOrderDetail(orderId) {
+        if (!orderId) return;
+        setOrderDetailLoading(true);
+        setOrderDetailError("");
+
+        try {
+            const res = await authFetch(`${apiBaseUrl}/orders/${encodeURIComponent(orderId)}`, {
+                method: "GET",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                cache: "no-store",
+            });
+
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json?.ok === false) {
+                throw buildResponseError(json, res, `Failed to fetch order detail (${res.status})`);
+            }
+
+            setOrderDetail(json?.order || null);
+            setOrderDetailEvents(Array.isArray(json?.events) ? json.events : []);
+        } catch (e) {
+            if (handleAuthFailure(e)) return;
+            setOrderDetail(null);
+            setOrderDetailEvents([]);
+            setOrderDetailError(e?.message || "Failed to fetch order detail");
+        } finally {
+            setOrderDetailLoading(false);
+        }
+    }
+
+    function openOrderDetail(order) {
+        const orderId = order?.orderId || order?.id;
+        if (!orderId) return;
+        setSelectedOrderId(String(orderId));
+        setOrderDetail(order);
+        setOrderDetailEvents([]);
+        setOrderDetailError("");
+    }
+
+    function closeOrderDetail() {
+        setSelectedOrderId(null);
+        setOrderDetail(null);
+        setOrderDetailEvents([]);
+        setOrderDetailError("");
+    }
+
+    async function cancelOrder(orderId) {
+        if (!orderId || cancelingOrderId) return;
+        setCancelingOrderId(orderId);
+        setApiMsg("");
+
+        try {
+            const res = await authFetch(`${apiBaseUrl}/orders/${encodeURIComponent(orderId)}`, {
+                method: "DELETE",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json?.ok === false) {
+                throw buildResponseError(json, res, `Failed to cancel order (${res.status})`);
+            }
+
+            setToast({
+                open: true,
+                title: "Cancel requested",
+                status: json?.status || "CANCEL_REQUESTED",
+                message: `${json?.orderId || orderId}`,
+            });
+            await Promise.allSettled([
+                fetchOpenOrders(),
+                fetchOrdersPage(ordersCursorRef.current),
+                fetchOrderDetail(orderId),
+            ]);
+        } catch (e) {
+            if (handleAuthFailure(e)) return;
+            setApiMsg(e?.message || "Cancel failed");
+            setOrderDetailError(e?.message || "Cancel failed");
+        } finally {
+            setCancelingOrderId(null);
+        }
+    }
+
+    async function cancelAllOpenOrders() {
+        if (cancelingOrderId || openOrders.length === 0) return;
+        setCancelingOrderId("__all__");
+        setApiMsg("");
+
+        try {
+            const res = await authFetch(`${apiBaseUrl}/orders/open`, {
+                method: "DELETE",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ symbol: selectedSymbol }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json?.ok === false) {
+                throw buildResponseError(json, res, `Failed to cancel open orders (${res.status})`);
+            }
+
+            setToast({
+                open: true,
+                title: "Cancel all requested",
+                status: json?.status || "CANCEL_REQUESTED",
+                message: `${json?.affectedCount ?? 0} open ${selectedSymbol} orders`,
+            });
+            await Promise.allSettled([
+                fetchOpenOrders(),
+                fetchOrdersPage(ordersCursorRef.current),
+            ]);
+        } catch (e) {
+            if (handleAuthFailure(e)) return;
+            setApiMsg(e?.message || "Cancel all failed");
+        } finally {
+            setCancelingOrderId(null);
+        }
     }
 
     async function fetchOrdersPage(cursor = null) {
@@ -1424,6 +1678,11 @@ export default function TradePage() {
         setApiMsg("");
         setFormErrors({});
         if (isPlacingOrder) return;
+        if (blockingReasonForSubmit) {
+            setFormErrors((prev) => ({ ...prev, base: blockingReasonForSubmit }));
+            setApiMsg(blockingReasonForSubmit);
+            return;
+        }
         setIsPlacingOrder(true);
 
         const schema = buildOrderSchema({ info: symbolInfo, orderType, currentPrice: asNumber(currentPrice), orderSizingMode });
@@ -1439,7 +1698,7 @@ export default function TradePage() {
             const map = zodErrorMap(parsed.error);
             setFormErrors(map);
             // Also show a short message in apiMsg for visibility
-            setApiMsg(map.notional || map.qty || map.quoteOrderQty || map.limitPrice || map.stopPrice || map.timeInForce || map.base || "Fix the highlighted fields");
+            setApiMsg(map.notional || map.qty || map.quoteOrderQty || map.limitPrice || map.stopPrice || map.timeInForce || map.balance || map.base || "Fix the highlighted fields");
             setIsPlacingOrder(false);
             return;
         }
@@ -1520,8 +1779,7 @@ export default function TradePage() {
                 body: JSON.stringify(payload),
             });
 
-            const data = await res.json();
-            console.log("Place order response:", data);
+            const data = await res.json().catch(() => ({}));
             if (!res.ok || !data.ok) {
                 if (res.status === 401) {
                     setIsPlacingOrder(false);
@@ -1535,13 +1793,18 @@ export default function TradePage() {
             }
 
             setApiMsg("Order sent. Waiting for status...");
+            await Promise.allSettled([
+                fetchOpenOrders(),
+                fetchOrdersPage(ordersCursorRef.current),
+                fetchBalances(),
+            ]);
         } catch (e) {
             if (handleAuthFailure(e)) {
                 setIsPlacingOrder(false);
                 return;
             }
             setIsPlacingOrder(false);
-            setApiMsg("Network error");
+            setApiMsg(e?.message || "Network error");
         }
     }
 
@@ -1569,6 +1832,20 @@ export default function TradePage() {
     const totalSymbols = symbolOrderRef.current.length;
 
     const currentPrice = marketBoard[selectedSymbol]?.price;
+    const marketParts = splitTradingPair(selectedSymbol);
+    const baseAsset = marketParts.base;
+    const quoteAsset = marketParts.quote;
+    const baseBalance = getBalance(baseAsset);
+    const quoteBalance = getBalance(quoteAsset);
+    const baseFree = asNumber(baseBalance.free) || 0;
+    const baseLocked = asNumber(baseBalance.locked) || 0;
+    const quoteFree = asNumber(quoteBalance.free) || 0;
+    const quoteLocked = asNumber(quoteBalance.locked) || 0;
+    const hasExchangeCredential = Boolean(accountContext?.exchangeCredential?.id);
+    const accountLabel = authUser?.email || "Signed in";
+    const credentialLabel = hasExchangeCredential
+        ? accountContext?.exchangeCredential?.label || "Binance Spot Testnet key linked"
+        : "API key missing";
     const isRealtimeOpen = status === "OPEN";
     const connectionLabel =
         replayStatus === "syncing"
@@ -1609,14 +1886,66 @@ export default function TradePage() {
     const topBookSpread = calculateSpread(orderBook?.bids?.[0]?.[0], orderBook?.asks?.[0]?.[0]) || "—";
     const activeAssetsCount = balances.filter((balance) => Number(balance.free || 0) || Number(balance.locked || 0)).length;
     const trackedOrderCount = Object.keys(ordersById).length;
+    const lastMarketUpdateLabel = lastUpdateTs ? new Date(lastUpdateTs).toLocaleTimeString() : "Waiting";
+    const lastEventLabel = lastEvent?.channel ? String(lastEvent.channel).replace("events:", "") : "No events";
 
     const requiresLimitPrice = LIMIT_PRICE_ORDER_TYPES.has(orderType);
     const requiresStopPrice = STOP_PRICE_ORDER_TYPES.has(orderType);
     const requiresTimeInForce = TIME_IN_FORCE_ORDER_TYPES.has(orderType);
     const usesQuoteSizing = orderType === "MARKET" && orderSizingMode === "QUOTE";
-    const estimatedTotal = usesQuoteSizing
-        ? quoteOrderQty
-        : `${formatPrice((Number(currentPrice) || 0) * (Number(qty) || 0))}`;
+    const previewPrice = estimateOrderPrice();
+    const qtyNum = usesQuoteSizing ? null : asNumber(qty);
+    const quoteQtyNum = usesQuoteSizing ? asNumber(quoteOrderQty) : null;
+    const previewBaseQty = usesQuoteSizing
+        ? (previewPrice && quoteQtyNum !== null ? quoteQtyNum / previewPrice : null)
+        : qtyNum;
+    const previewNotional = usesQuoteSizing
+        ? quoteQtyNum
+        : (qtyNum !== null && previewPrice ? qtyNum * previewPrice : null);
+    const estimatedTotal = previewNotional !== null ? formatPrice(previewNotional) : "—";
+    const requiredBalanceAsset = side === "BUY" ? quoteAsset : baseAsset;
+    const requiredBalanceAmount = side === "BUY" ? previewNotional : previewBaseQty;
+    const availableBalanceAmount = side === "BUY" ? quoteFree : baseFree;
+    const balanceEstimateMissing =
+        hasExchangeCredential &&
+        ((side === "BUY" && !usesQuoteSizing && !previewPrice) || (side === "SELL" && usesQuoteSizing && !previewPrice));
+    const balanceBlockReason = balanceEstimateMissing
+        ? "Waiting for a market price to estimate required balance."
+        : requiredBalanceAmount !== null && requiredBalanceAmount > availableBalanceAmount + 1e-10
+            ? `Insufficient ${requiredBalanceAsset}: need ${formatAmount(requiredBalanceAmount)} available, have ${formatAmount(availableBalanceAmount)}.`
+            : "";
+    const accountBlockReason = !hasExchangeCredential
+        ? "Add Binance Spot Testnet API keys before trading."
+        : balancesLoading
+            ? "Refreshing account balances."
+            : balancesError
+                ? "Account balances are unavailable."
+                : "";
+    const filterBlockReason = symbolInfoStatus === "loading"
+        ? "Loading exchange filters."
+        : symbolInfoStatus === "error"
+            ? "Exchange filters are unavailable for this symbol."
+            : "";
+    const blockingReasonForSubmit = accountBlockReason || filterBlockReason || balanceBlockReason;
+    const orderSubmitDisabled = isPlacingOrder || Boolean(blockingReasonForSubmit);
+    const orderNoticeTone = blockingReasonForSubmit || formErrors.base || apiMsg?.toLowerCase().includes("failed") || apiMsg?.toLowerCase().includes("error")
+        ? TC.tone.danger
+        : apiMsg?.toLowerCase().includes("sent") || apiMsg?.toLowerCase().includes("copied")
+            ? TC.tone.success
+            : TC.tone.info;
+    const visiblePortfolioRows = buildPortfolioRows({ balances, marketBoard, quoteAsset });
+    const totalPortfolioValue = visiblePortfolioRows.reduce((sum, row) => sum + (Number.isFinite(row.estimatedValue) ? row.estimatedValue : 0), 0);
+    const favoriteRows = pinnedList
+        .map((sym) => [sym, marketBoard[sym]])
+        .filter(([sym]) => !f || sym.toLowerCase().includes(f));
+    const switcherRows = rows.slice(0, 12);
+    const openOrderRows = openOrders.map((order) => mergeOrderWithRealtime(order, ordersById));
+    const historyOrderRows = ordersPage.map((order) => mergeOrderWithRealtime(order, ordersById));
+    const fillReadyRows = historyOrderRows.filter((order) => {
+        const status = String(order.status || "").toUpperCase();
+        return FILL_READY_STATUSES.has(status) || Number(order.executedQty || 0) > 0 || Number(order.cummulativeQuoteQty || 0) > 0;
+    });
+    const selectedOrder = orderDetail ? mergeOrderWithRealtime(orderDetail, ordersById) : null;
 
     if (!authReady) {
         return (
@@ -1627,7 +1956,7 @@ export default function TradePage() {
     }
 
     return (
-        <main className={`${themeClass} ${TC.shell} transition-colors duration-200`}>
+        <main className={`${themeClass} ${TC.shell} pb-24 transition-colors duration-200 xl:pb-0`}>
             {/* Topbar - Glassmorphism style */}
             <div className={`sticky top-0 z-40 border-b backdrop-blur-md ${TC.topbar}`}>
                 <div className="max-w-[1920px] mx-auto px-4 h-16 flex items-center justify-between">
@@ -1734,314 +2063,108 @@ export default function TradePage() {
                             </span>
                         </div>
                         <div className={`mt-1 text-xs ${TC.text.muted}`}>
-                            {selectedSymbol.replace("USDT", "")}/USDT execution workspace · {lastReplayLabel}
+                            {baseAsset}/{quoteAsset} execution workspace · {openOrderRows.length} open · {trackedOrderCount} realtime tracked · {lastReplayLabel}
                         </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[620px]">
                         <TerminalMetric label="Last price" value={formatPrice(currentPrice)} tone={TC.text.primary} />
                         <TerminalMetric label="Spread" value={topBookSpread} tone={orderBook.status === "ready" ? TC.tone.success : TC.tone.warning} />
                         <TerminalMetric label="Assets" value={String(activeAssetsCount)} tone={TC.text.primary} />
-                        <TerminalMetric label="Tracked orders" value={String(trackedOrderCount)} tone={trackedOrderCount ? TC.tone.info : TC.text.muted} />
+                        <TerminalMetric label="Events" value={`${wsMsgCount} · ${lastMarketUpdateLabel}`} tone={lastEventLabel === "No events" ? TC.text.muted : TC.tone.info} />
                     </div>
                 </div>
 
-                <MobileTerminalNav />
+                <AccountReadinessPanel
+                    accountLabel={accountLabel}
+                    credentialLabel={credentialLabel}
+                    hasExchangeCredential={hasExchangeCredential}
+                    balancesError={balancesError}
+                    balancesLoading={balancesLoading}
+                    connectionLabel={connectionLabel}
+                    connectionTone={connectionTone}
+                    lastReplayLabel={lastReplayLabel}
+                    onRefresh={() => {
+                        fetchBalances();
+                        fetchOpenOrders();
+                    }}
+                />
+
+                <MobileTerminalNav
+                    onTrade={() => setMobileTradeOpen(true)}
+                    openOrdersCount={openOrderRows.length}
+                    activeTab={activeTab}
+                    setActiveTab={setActiveTab}
+                />
 
                 <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_420px] 2xl:grid-cols-[380px_minmax(0,1fr)_460px]">
                     {/* Left Column: Controls */}
                     <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
 
-                        {/* Order Box */}
-                        <OrderTicketPanel>
-                            <div className="p-5">
-                                {/* Buy/Sell Segmented Control */}
-                                <div className={`grid grid-cols-2 gap-1 p-1 mb-6 ${TC.segment}`}>
-                                    <button
-                                        onClick={() => setSide("BUY")}
-                                        className={`py-2 text-sm font-semibold rounded-md transition-all ${side === "BUY"
-                                            ? `${TC.segmentActive} ${TC.side.buyActive}`
-                                            : TC.segmentInactive}`}
-                                    >
-                                        BUY
-                                    </button>
-                                    <button
-                                        onClick={() => setSide("SELL")}
-                                        className={`py-2 text-sm font-semibold rounded-md transition-all ${side === "SELL"
-                                            ? `${TC.segmentActive} ${TC.side.sellActive}`
-                                            : TC.segmentInactive}`}
-                                    >
-                                        SELL
-                                    </button>
-                                </div>
-
-                                {/* Order Type Tabs */}
-                                <div className="flex gap-3 border-b border-neutral-200 dark:border-white/5 mb-6 pb-2 overflow-x-auto">
-                                    {ORDER_TYPE_TABS.map((t) => {
-                                        const isActive = orderType === t;
-                                        return (
-                                            <button
-                                                key={t}
-                                                onClick={() => {
-                                                    setOrderType(t);
-                                                    if (!LIMIT_PRICE_ORDER_TYPES.has(t)) setLimitPrice("");
-                                                    if (!STOP_PRICE_ORDER_TYPES.has(t)) setStopPrice("");
-                                                    if (!TIME_IN_FORCE_ORDER_TYPES.has(t)) setTimeInForce("GTC");
-                                                }}
-                                                className={`text-xs font-medium pb-2 -mb-2.5 border-b-2 transition-colors whitespace-nowrap ${isActive
-                                                    ? TC.tab.active
-                                                    : TC.tab.inactive}`}
-                                            >
-                                                {ORDER_TYPE_LABELS[t] || t}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-
-                                {/* Inputs */}
-                                <div className="space-y-4">
-                                    {orderType === "MARKET" && (
-                                        <div>
-                                            <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
-                                                <span>Size by</span>
-                                            </div>
-                                            <div className={`grid grid-cols-2 gap-1 p-1 ${TC.segment}`}>
-                                                {[
-                                                    ["BASE", selectedSymbol.replace("USDT", "")],
-                                                    ["QUOTE", "USDT"],
-                                                ].map(([mode, label]) => (
-                                                    <button
-                                                        key={mode}
-                                                        type="button"
-                                                        onClick={() => {
-                                                            setOrderSizingMode(mode);
-                                                            setFormErrors((prev) => ({ ...prev, qty: undefined, quoteOrderQty: undefined, notional: undefined }));
-                                                        }}
-                                                        className={`py-2 text-xs font-semibold rounded-md transition-all ${orderSizingMode === mode
-                                                            ? TC.segmentActive
-                                                            : TC.segmentInactive}`}
-                                                    >
-                                                        {label}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {requiresLimitPrice && (
-                                        <div>
-                                            <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
-                                                <span>Limit price</span>
-                                            </div>
-                                            <div className={`flex items-center px-3 py-2.5 transition-all ${TC.input}`}>
-                                                <input
-                                                    className="bg-transparent text-sm w-full outline-none font-mono"
-                                                    placeholder="Enter limit price"
-                                                    value={limitPrice}
-                                                    onChange={(e) => {
-                                                        setLimitPrice(e.target.value);
-                                                        setFormErrors((prev) => ({ ...prev, limitPrice: undefined, notional: undefined }));
-                                                    }}
-                                                />
-                                                <span className="text-xs text-neutral-500 font-medium">USDT</span>
-                                            </div>
-                                            {formErrors.limitPrice && (
-                                                <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.limitPrice}</div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {requiresStopPrice && (
-                                        <div>
-                                            <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
-                                                <span>Stop price</span>
-                                            </div>
-                                            <div className={`flex items-center px-3 py-2.5 transition-all ${TC.input}`}>
-                                                <input
-                                                    className="bg-transparent text-sm w-full outline-none font-mono"
-                                                    placeholder="Enter stop trigger"
-                                                    value={stopPrice}
-                                                    onChange={(e) => {
-                                                        setStopPrice(e.target.value);
-                                                        setFormErrors((prev) => ({ ...prev, stopPrice: undefined, notional: undefined }));
-                                                    }}
-                                                />
-                                                <span className="text-xs text-neutral-500 font-medium">USDT</span>
-                                            </div>
-                                            {formErrors.stopPrice && (
-                                                <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.stopPrice}</div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {orderType === "MARKET" && <div className="text-xs text-neutral-500">Executes at best available Testnet price.</div>}
-                                    {formErrors.notional && (
-                                        <div className={`text-xs font-medium ${TC.tone.danger}`}>{formErrors.notional}</div>
-                                    )}
-
-                                    {requiresTimeInForce && (
-                                        <div>
-                                            <div className="text-xs mb-1.5 text-neutral-500">Time in force</div>
-                                            <div className={`grid grid-cols-3 gap-1 p-1 ${TC.segment}`}>
-                                                {TIME_IN_FORCE_OPTIONS.map((option) => (
-                                                    <button
-                                                        key={option}
-                                                        type="button"
-                                                        onClick={() => {
-                                                            setTimeInForce(option);
-                                                            setFormErrors((prev) => ({ ...prev, timeInForce: undefined }));
-                                                        }}
-                                                        className={`py-2 text-xs font-semibold rounded-md transition-all ${timeInForce === option
-                                                            ? TC.segmentActive
-                                                            : TC.segmentInactive}`}
-                                                    >
-                                                        {option}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                            {formErrors.timeInForce && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.timeInForce}</div>}
-                                        </div>
-                                    )}
-
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <div className="text-xs mb-1.5 text-neutral-500">{usesQuoteSizing ? "Quote amount" : "Quantity"}</div>
-                                            <div className={`flex items-center px-3 py-2.5 transition-all ${TC.input}`}>
-                                                <input
-                                                    className="bg-transparent text-sm w-full outline-none font-mono"
-                                                    value={usesQuoteSizing ? quoteOrderQty : qty}
-                                                    onChange={(e) => {
-                                                        if (usesQuoteSizing) {
-                                                            setQuoteOrderQty(e.target.value);
-                                                            setFormErrors((prev) => ({ ...prev, quoteOrderQty: undefined, notional: undefined }));
-                                                        } else {
-                                                            setQty(e.target.value);
-                                                            setFormErrors((prev) => ({ ...prev, qty: undefined, notional: undefined }));
-                                                        }
-                                                    }}
-                                                    placeholder="0.00"
-                                                />
-                                                <span className="text-xs text-neutral-500 font-medium">{usesQuoteSizing ? "USDT" : selectedSymbol.replace("USDT", "")}</span>
-                                            </div>
-                                            {formErrors.qty && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.qty}</div>}
-                                            {formErrors.quoteOrderQty && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.quoteOrderQty}</div>}
-                                        </div>
-                                        <div>
-                                            <div className="text-xs mb-1.5 text-neutral-500">Total</div>
-                                            <div className={`flex items-center px-3 py-2.5 ${TC.readonlyInput}`}>
-                                                <input
-                                                    className="bg-transparent text-sm w-full outline-none font-mono cursor-default"
-                                                    placeholder="0.00"
-                                                    disabled
-                                                    value={estimatedTotal}
-                                                    readOnly
-                                                />
-                                                <span className="text-xs opacity-70 font-medium">USDT</span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center justify-between py-2 text-xs">
-                                        <span className="text-neutral-500">Last Price</span>
-                                        <span className={`font-mono font-medium ${isDark ? "text-white" : "text-black"}`}>{formatPrice(currentPrice)}</span>
-                                    </div>
-
-                                    <SymbolFilterSummary
-                                        orderType={orderType}
-                                        status={symbolInfoStatus}
-                                        symbolInfo={symbolInfo}
-                                    />
-
-                                    {symbolInfoStatus === "error" && (
-                                        <div className={`text-xs bg-rose-500/10 p-2 rounded ${TC.tone.danger}`}>{symbolInfoError}</div>
-                                    )}
-
-                                    <button
-                                        onClick={placeOrder}
-                                        disabled={isPlacingOrder}
-                                        className={`w-full rounded-lg py-3.5 text-sm font-bold text-white transition-all transform active:scale-[0.98] ${side === "BUY" ? "bg-emerald-500 hover:bg-emerald-400" : "bg-rose-500 hover:bg-rose-400"} ${isPlacingOrder ? "cursor-not-allowed opacity-80" : ""}`}
-                                    >
-                                        {isPlacingOrder ? "Submitting..." : (
-                                            <>
-                                                {side === "BUY" ? "Buy" : "Sell"} {selectedSymbol.replace("USDT", "")}
-                                            </>
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
-                        </OrderTicketPanel>
+                        <div className="hidden xl:block">
+                            <OrderTicketPanel>
+                                <OrderTicketContent
+                                    apiMsg={apiMsg}
+                                    baseAsset={baseAsset}
+                                    baseFree={baseFree}
+                                    blockingReason={blockingReasonForSubmit}
+                                    currentPrice={currentPrice}
+                                    estimatedTotal={estimatedTotal}
+                                    formErrors={formErrors}
+                                    handlePercentSize={handlePercentSize}
+                                    isPlacingOrder={isPlacingOrder}
+                                    limitPrice={limitPrice}
+                                    onPlaceOrder={placeOrder}
+                                    orderNoticeTone={orderNoticeTone}
+                                    orderSizingMode={orderSizingMode}
+                                    orderSubmitDisabled={orderSubmitDisabled}
+                                    orderType={orderType}
+                                    previewBaseQty={previewBaseQty}
+                                    previewNotional={previewNotional}
+                                    quoteAsset={quoteAsset}
+                                    quoteFree={quoteFree}
+                                    quoteOrderQty={quoteOrderQty}
+                                    requiresLimitPrice={requiresLimitPrice}
+                                    requiresStopPrice={requiresStopPrice}
+                                    requiresTimeInForce={requiresTimeInForce}
+                                    selectedSymbol={selectedSymbol}
+                                    setFormErrors={setFormErrors}
+                                    setLimitPrice={setLimitPrice}
+                                    setOrderSizingMode={setOrderSizingMode}
+                                    setOrderType={setOrderType}
+                                    setQty={setQty}
+                                    setQuoteOrderQty={setQuoteOrderQty}
+                                    setSide={setSide}
+                                    setStopPrice={setStopPrice}
+                                    setTimeInForce={setTimeInForce}
+                                    side={side}
+                                    stopPrice={stopPrice}
+                                    symbolInfo={symbolInfo}
+                                    symbolInfoError={symbolInfoError}
+                                    symbolInfoStatus={symbolInfoStatus}
+                                    timeInForce={timeInForce}
+                                    usesQuoteSizing={usesQuoteSizing}
+                                    qty={qty}
+                                />
+                            </OrderTicketPanel>
+                        </div>
 
                         {/* Account Summary */}
-                        <BalancesPanel>
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-sm font-semibold tracking-tight">Assets</h3>
-                                <button
-                                    onClick={fetchBalances}
-                                    disabled={balancesLoading}
-                                    className={`p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors ${balancesLoading ? "animate-spin" : ""}`}
-                                    title="Refresh balances"
-                                >
-                                    <svg className={`w-3.5 h-3.5 ${isDark ? "text-neutral-400" : "text-neutral-500"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                                </button>
-                            </div>
-
-                            {balancesError && <div className={`text-xs mb-3 ${TC.tone.danger}`}>{balancesError}</div>}
-
-                            <div className="space-y-3 text-sm">
-                                {(() => {
-                                    const byAsset = new Map(balances.map((b) => [b.asset, b]));
-                                    const usdt = byAsset.get("USDT");
-                                    const usdtFree = usdt ? Number(usdt.free || 0) : 0;
-                                    const pinnedBases = Array.from(pinned).map((s) => String(s).toUpperCase().replace(/USDT$/, "")).filter((s) => s && s !== "USDT");
-                                    const uniqPinnedBases = Array.from(new Set(pinnedBases)).slice(0, 8);
-
-                                    return (
-                                        <>
-                                            <div className="flex items-center justify-between py-1">
-                                                <div className="flex items-center gap-2">
-                                                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${TC.side.buyBadge}`}>$</div>
-                                                    <span className="font-medium">USDT</span>
-                                                </div>
-                                                <div className="text-right">
-                                                    <div className="font-mono font-medium">{trimZeros(usdtFree.toFixed(2))}</div>
-                                                </div>
-                                            </div>
-
-                                            {uniqPinnedBases.length > 0 && (
-                                                <div className="border-t border-dashed border-neutral-200 dark:border-white/10 pt-3 mt-3 space-y-3">
-                                                    {uniqPinnedBases.map((asset) => {
-                                                        const b = byAsset.get(asset);
-                                                        const free = b ? Number(b.free || 0) : 0;
-                                                        const sym = `${asset}USDT`;
-                                                        const mark = Number(marketBoard[sym]?.price || 0);
-                                                        const est = Number.isFinite(mark) && mark > 0 ? free * mark : null;
-
-                                                        if (free === 0) return null;
-
-                                                        return (
-                                                            <div key={asset} className="flex items-center justify-between">
-                                                                <button
-                                                                    onClick={() => setSelectedSymbol(sym)}
-                                                                    className={`text-xs font-medium transition-colors ${TC.symbolLink}`}
-                                                                >
-                                                                    {asset}
-                                                                </button>
-                                                                <div className="text-right">
-                                                                    <div className="font-mono text-xs">{trimZeros(free.toFixed(4))}</div>
-                                                                    <div className="text-[10px] text-neutral-500">
-                                                                        {est !== null ? `≈ $${formatPrice(est)}` : "—"}
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                            {balancesUpdatedAt && <div className="pt-2 text-[10px] text-neutral-500 text-right">Updated {new Date(balancesUpdatedAt).toLocaleTimeString()}</div>}
-                                        </>
-                                    );
-                                })()}
-                            </div>
-                        </BalancesPanel>
+                        <PortfolioPanel
+                            balancesError={balancesError}
+                            balancesLoading={balancesLoading}
+                            balancesUpdatedAt={balancesUpdatedAt}
+                            baseAsset={baseAsset}
+                            baseFree={baseFree}
+                            baseLocked={baseLocked}
+                            hasExchangeCredential={hasExchangeCredential}
+                            onRefresh={fetchBalances}
+                            onSelectSymbol={setSelectedSymbol}
+                            portfolioRows={visiblePortfolioRows}
+                            quoteAsset={quoteAsset}
+                            quoteFree={quoteFree}
+                            quoteLocked={quoteLocked}
+                            totalPortfolioValue={totalPortfolioValue}
+                        />
                     </div>
 
                     {/* Center Column: Chart Workspace */}
@@ -2049,8 +2172,18 @@ export default function TradePage() {
                         {/* Chart Section */}
                         <ChartPanel>
                             <div className="flex flex-wrap items-center justify-between p-4 border-b border-neutral-100 dark:border-white/5 gap-x-4 gap-y-4">
-                                <div className="flex items-center gap-4">
-                                    <h2 className="text-lg font-bold tracking-tight">{selectedSymbol.replace("USDT", "")}<span className="text-neutral-500 text-sm font-normal">/USDT</span></h2>
+                                <div className="flex min-w-0 flex-wrap items-center gap-4">
+                                    <MarketSwitcher
+                                        favoriteRows={favoriteRows}
+                                        filter={filter}
+                                        onFilterChange={setFilter}
+                                        onSelectSymbol={setSelectedSymbol}
+                                        pinned={pinned}
+                                        rows={switcherRows}
+                                        selectedSymbol={selectedSymbol}
+                                        togglePin={togglePin}
+                                        totalSymbols={totalSymbols}
+                                    />
                                     <div className="h-4 w-[1px] bg-neutral-200 dark:bg-white/10"></div>
                                     <div className={`font-mono text-lg font-medium tracking-tight ${isDark ? "text-white" : "text-neutral-900"}`}>
                                         {formatPrice(currentPrice)}
@@ -2112,150 +2245,139 @@ export default function TradePage() {
                     {/* Bottom Workspace: Portfolio and market activity */}
                     <div className="xl:col-start-2 xl:col-span-2">
                         <ActivityPanel>
-                            {/* Header: Flex col on mobile, row on desktop to prevent squashing */}
-                            <div className="flex flex-col md:flex-row md:items-center justify-between px-4 pt-4 pb-2 border-b border-neutral-100 dark:border-white/5 gap-4">
-                                {/* Tabs Container: Added overflow-x-auto to handle many tabs on small screen */}
-                                <div className="flex gap-6 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-hide">
-                                    {[
-                                        { id: "positions", label: "Open Positions" },
-                                        { id: "orders", label: "Order History" },
-                                        { id: "trades", label: "Market Board" },
-                                    ].map((t) => (
-                                        <button
-                                            key={t.id}
-                                            onClick={() => {
-                                                setActiveTab(t.id);
-                                                // Reset cursors logic
-                                                if (t.id === "orders") { setOrdersCursor(null); setOrdersNextCursor(null); setOrdersPrevStack([]); setOrdersTotalEntries(0); setOrdersTotalPages(1); }
-                                                if (t.id === "positions") { setPositionsError(""); setPositionsCursor(null); setPositionsNextCursor(null); setPositionsPrevStack([]); setPositionsTotalEntries(0); setPositionsTotalPages(1); }
-                                            }}
-                                            className={`text-sm font-medium pb-3 border-b-2 transition-colors whitespace-nowrap ${activeTab === t.id
-                                                ? TC.tab.activeAccent
-                                                : TC.tab.inactive}`}
-                                        >
-                                            {t.label}
-                                        </button>
-                                    ))}
-                                </div>
-
-                                {activeTab === "trades" && (
-                                    <div className={`flex items-center px-2 py-1.5 w-full md:w-auto ${TC.input}`}>
-                                        <svg className="w-3 h-3 text-neutral-500 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                                        <input
-                                            className="bg-transparent text-xs outline-none w-full md:w-32"
-                                            value={filter}
-                                            onChange={(e) => setFilter(e.target.value)}
-                                            placeholder="Filter Symbol"
-                                        />
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="flex-1 overflow-hidden relative">
-                                <div className="absolute inset-0 overflow-auto custom-scrollbar">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className={`sticky top-0 z-10 text-xs uppercase tracking-wider ${TC.tableHeader}`}>
-                                            <tr>
-                                                {activeTab === "positions" && ["Symbol", "Size", "Entry", "Mark", "Realized PnL", "Unrealized PnL"].map(h => <th key={h} className="px-5 py-3 font-medium whitespace-nowrap">{h}</th>)}
-                                                {activeTab === "orders" && ["ID", "Symbol", "Side", "Type", "Qty", "Status"].map(h => <th key={h} className="px-5 py-3 font-medium whitespace-nowrap">{h}</th>)}
-                                                {activeTab === "trades" && ["Pin", "Symbol", "Price", "Time"].map(h => <th key={h} className="px-5 py-3 font-medium whitespace-nowrap">{h}</th>)}
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-neutral-100 dark:divide-white/5">
-                                            {activeTab === "positions" && (
-                                                <PositionsTableRows
-                                                    marketBoard={marketBoard}
-                                                    positionsError={positionsError}
-                                                    positionsLoading={positionsLoading}
-                                                    positionsPage={positionsPage}
-                                                    onSelectSymbol={setSelectedSymbol}
-                                                />
-                                            )}
-                                            {activeTab === "orders" && (
-                                                <OrdersTableRows
-                                                    copyOrderId={copyOrderId}
-                                                    isDark={isDark}
-                                                    ordersById={ordersById}
-                                                    ordersLoading={ordersLoading}
-                                                    ordersPage={ordersPage}
-                                                    onSelectSymbol={setSelectedSymbol}
-                                                />
-                                            )}
-                                            {activeTab === "trades" && (
-                                                <MarketBoardRows
-                                                    pinned={pinned}
-                                                    shown={shown}
-                                                    togglePin={togglePin}
-                                                    onSelectSymbol={setSelectedSymbol}
-                                                />
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-
-                            {/* Footer / Pagination */}
-                            {(activeTab === "positions" || activeTab === "orders") && (
-                                <div
-                                    className={`flex items-center justify-between p-2 border-t ${isDark ? "border-white/10" : "border-black/5"}`}>
-
-                                    <div className="text-xs text-neutral-500">
-                                        {activeTab === "positions" ? positionsTotalEntries : ordersTotalEntries} items
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <button
-                                            className={`p-1.5 rounded-md disabled:opacity-30 ${TC.iconButton}`}
-                                            onClick={() => activeTab === "positions" ? fetchPositionsPage(positionsCursor) : fetchOrdersPage(ordersCursor)}
-                                            disabled={activeTab === "positions" ? positionsLoading : ordersLoading}
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                                        </button>
-                                        <button
-                                            className={`p-1.5 rounded-md disabled:opacity-30 ${TC.iconButton}`}
-                                            disabled={(activeTab === "positions" ? positionsPrevStack.length === 0 : ordersPrevStack.length === 0)}
-                                            onClick={() => {
-                                                if (activeTab === "positions") {
-                                                    setPositionsPrevStack(prev => {
-                                                        const next = [...prev];
-                                                        setPositionsCursor(next.pop() || null);
-                                                        return next;
-                                                    });
-                                                } else {
-                                                    setOrdersPrevStack(prev => {
-                                                        const next = [...prev];
-                                                        setOrdersCursor(next.pop() || null);
-                                                        return next;
-                                                    });
-                                                }
-                                            }}
-                                        >
-                                            <FiArrowLeft className="w-4 h-4" />
-                                        </button>
-                                        <span className="text-xs flex items-center px-2 text-neutral-500">
-                                            Page {activeTab === "positions" ? positionsCurrentPage : ordersCurrentPage}
-                                        </span>
-                                        <button
-                                            className={`p-1.5 rounded-md disabled:opacity-30 ${TC.iconButton}`}
-                                            disabled={activeTab === "positions" ? (!positionsNextCursor || positionsIsLastPage) : (!ordersNextCursor || ordersIsLastPage)}
-                                            onClick={() => {
-                                                if (activeTab === "positions" && positionsNextCursor) {
-                                                    setPositionsPrevStack(p => [...p, positionsCursor]);
-                                                    setPositionsCursor(positionsNextCursor);
-                                                } else if (activeTab === "orders" && ordersNextCursor) {
-                                                    setOrdersPrevStack(p => [...p, ordersCursor]);
-                                                    setOrdersCursor(ordersNextCursor);
-                                                }
-                                            }}
-                                        >
-                                            <FiArrowRight className="w-4 h-4" />
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
+                            <TerminalWorkspace
+                                activeTab={activeTab}
+                                cancelAllOpenOrders={cancelAllOpenOrders}
+                                cancelingOrderId={cancelingOrderId}
+                                copyOrderId={copyOrderId}
+                                fillReadyRows={fillReadyRows}
+                                filter={filter}
+                                historyOrderRows={historyOrderRows}
+                                isDark={isDark}
+                                marketBoard={marketBoard}
+                                onOpenOrder={openOrderDetail}
+                                onRefreshOrders={() => {
+                                    fetchOpenOrders();
+                                    fetchOrdersPage(ordersCursor);
+                                }}
+                                onSelectSymbol={setSelectedSymbol}
+                                openOrdersError={openOrdersError}
+                                openOrdersLoading={openOrdersLoading}
+                                openOrderRows={openOrderRows}
+                                ordersCursor={ordersCursor}
+                                ordersCurrentPage={ordersCurrentPage}
+                                ordersError={ordersError}
+                                ordersIsFirstPage={ordersIsFirstPage}
+                                ordersIsLastPage={ordersIsLastPage}
+                                ordersLoading={ordersLoading}
+                                ordersNextCursor={ordersNextCursor}
+                                ordersPrevStack={ordersPrevStack}
+                                ordersTotalEntries={ordersTotalEntries}
+                                ordersWorkspaceView={ordersWorkspaceView}
+                                pinned={pinned}
+                                positionsCurrentPage={positionsCurrentPage}
+                                positionsCursor={positionsCursor}
+                                positionsError={positionsError}
+                                positionsIsFirstPage={positionsIsFirstPage}
+                                positionsIsLastPage={positionsIsLastPage}
+                                positionsLoading={positionsLoading}
+                                positionsNextCursor={positionsNextCursor}
+                                positionsPage={positionsPage}
+                                positionsTotalEntries={positionsTotalEntries}
+                                setActiveTab={(tab) => {
+                                    setActiveTab(tab);
+                                    if (tab === "orders") {
+                                        setOrdersCursor(null);
+                                        setOrdersNextCursor(null);
+                                        setOrdersPrevStack([]);
+                                        setOrdersTotalEntries(0);
+                                        setOrdersTotalPages(1);
+                                    }
+                                    if (tab === "positions") {
+                                        setPositionsError("");
+                                        setPositionsCursor(null);
+                                        setPositionsNextCursor(null);
+                                        setPositionsPrevStack([]);
+                                        setPositionsTotalEntries(0);
+                                        setPositionsTotalPages(1);
+                                    }
+                                }}
+                                setFilter={setFilter}
+                                setOrdersCursor={setOrdersCursor}
+                                setOrdersPrevStack={setOrdersPrevStack}
+                                setOrdersWorkspaceView={setOrdersWorkspaceView}
+                                setPositionsCursor={setPositionsCursor}
+                                setPositionsPrevStack={setPositionsPrevStack}
+                                shown={shown}
+                                togglePin={togglePin}
+                                totalSymbols={totalSymbols}
+                                fetchOrdersPage={fetchOrdersPage}
+                                fetchPositionsPage={fetchPositionsPage}
+                            />
                         </ActivityPanel>
                     </div>
                 </div>
             </div>
+
+            <MobileTradeDrawer open={mobileTradeOpen} onClose={() => setMobileTradeOpen(false)}>
+                <OrderTicketContent
+                    apiMsg={apiMsg}
+                    baseAsset={baseAsset}
+                    baseFree={baseFree}
+                    blockingReason={blockingReasonForSubmit}
+                    currentPrice={currentPrice}
+                    estimatedTotal={estimatedTotal}
+                    formErrors={formErrors}
+                    handlePercentSize={handlePercentSize}
+                    isPlacingOrder={isPlacingOrder}
+                    limitPrice={limitPrice}
+                    onPlaceOrder={placeOrder}
+                    orderNoticeTone={orderNoticeTone}
+                    orderSizingMode={orderSizingMode}
+                    orderSubmitDisabled={orderSubmitDisabled}
+                    orderType={orderType}
+                    previewBaseQty={previewBaseQty}
+                    previewNotional={previewNotional}
+                    quoteAsset={quoteAsset}
+                    quoteFree={quoteFree}
+                    quoteOrderQty={quoteOrderQty}
+                    requiresLimitPrice={requiresLimitPrice}
+                    requiresStopPrice={requiresStopPrice}
+                    requiresTimeInForce={requiresTimeInForce}
+                    selectedSymbol={selectedSymbol}
+                    setFormErrors={setFormErrors}
+                    setLimitPrice={setLimitPrice}
+                    setOrderSizingMode={setOrderSizingMode}
+                    setOrderType={setOrderType}
+                    setQty={setQty}
+                    setQuoteOrderQty={setQuoteOrderQty}
+                    setSide={setSide}
+                    setStopPrice={setStopPrice}
+                    setTimeInForce={setTimeInForce}
+                    side={side}
+                    stopPrice={stopPrice}
+                    symbolInfo={symbolInfo}
+                    symbolInfoError={symbolInfoError}
+                    symbolInfoStatus={symbolInfoStatus}
+                    timeInForce={timeInForce}
+                    usesQuoteSizing={usesQuoteSizing}
+                    qty={qty}
+                />
+            </MobileTradeDrawer>
+
+            <OrderDetailDrawer
+                cancelingOrderId={cancelingOrderId}
+                events={orderDetailEvents}
+                error={orderDetailError}
+                isDark={isDark}
+                loading={orderDetailLoading}
+                onCancelOrder={cancelOrder}
+                onClose={closeOrderDetail}
+                onCopy={copyOrderId}
+                onSelectSymbol={setSelectedSymbol}
+                open={Boolean(selectedOrderId)}
+                order={selectedOrder}
+            />
 
             {/* Toast Modal - Styled Premium */}
             {toast.open && (
@@ -2289,18 +2411,58 @@ export default function TradePage() {
     );
 }
 
-function MobileTerminalNav() {
+function MobileTerminalNav({ activeTab, onTrade, openOrdersCount, setActiveTab }) {
+    const items = [
+        { id: "trade", label: "Trade", icon: FiZap, onClick: onTrade },
+        { id: "orders", label: "Orders", icon: FiList, onClick: () => setActiveTab("orders"), count: openOrdersCount },
+        { id: "trades", label: "Markets", icon: FiBarChart2, onClick: () => setActiveTab("trades") },
+        { id: "portfolio", label: "Assets", icon: FiBriefcase, href: "#account-balances" },
+    ];
+
     return (
-        <nav className="mb-4 flex gap-2 overflow-x-auto pb-1 xl:hidden" aria-label="Terminal sections">
-            {MOBILE_TERMINAL_SECTIONS.map(([href, label]) => (
-                <a
-                    key={href}
-                    href={href}
-                    className={`shrink-0 px-3 py-2 text-xs font-semibold rounded-lg ${TC.secondaryButton}`}
-                >
-                    {label}
-                </a>
-            ))}
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-neutral-950/95 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2 backdrop-blur xl:hidden" aria-label="Mobile terminal navigation">
+            <div className="mx-auto grid max-w-lg grid-cols-4 gap-1">
+                {items.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeTab === item.id || (item.id === "trade" && false);
+                    const content = (
+                        <>
+                            <span className="relative flex h-5 items-center justify-center">
+                                <Icon className="h-4 w-4" />
+                                {item.count > 0 && (
+                                    <span className="absolute -right-2 -top-1 rounded-full bg-cyan-400 px-1 text-[9px] font-bold leading-3 text-neutral-950">
+                                        {item.count}
+                                    </span>
+                                )}
+                            </span>
+                            <span className="mt-1 text-[10px] font-semibold">{item.label}</span>
+                        </>
+                    );
+
+                    if (item.href) {
+                        return (
+                            <a
+                                key={item.id}
+                                href={item.href}
+                                className={`flex flex-col items-center rounded-lg px-2 py-1.5 ${isActive ? "text-white" : "text-neutral-400"}`}
+                            >
+                                {content}
+                            </a>
+                        );
+                    }
+
+                    return (
+                        <button
+                            key={item.id}
+                            type="button"
+                            onClick={item.onClick}
+                            className={`flex flex-col items-center rounded-lg px-2 py-1.5 ${isActive ? "text-white" : "text-neutral-400"}`}
+                        >
+                            {content}
+                        </button>
+                    );
+                })}
+            </div>
         </nav>
     );
 }
@@ -2310,6 +2472,511 @@ function TerminalMetric({ label, value, tone }) {
         <div className="rounded-lg border border-neutral-200 bg-white/70 px-3 py-2 shadow-sm dark:border-white/10 dark:bg-white/[0.03]">
             <div className={`text-[10px] font-medium uppercase tracking-wide ${TC.text.muted}`}>{label}</div>
             <div className={`mt-1 truncate font-mono text-sm font-semibold ${tone || TC.text.primary}`}>{value}</div>
+        </div>
+    );
+}
+
+function AccountReadinessPanel({
+    accountLabel,
+    credentialLabel,
+    hasExchangeCredential,
+    balancesError,
+    balancesLoading,
+    connectionLabel,
+    connectionTone,
+    lastReplayLabel,
+    onRefresh,
+}) {
+    const balanceTone = balancesError ? TC.tone.danger : balancesLoading ? TC.tone.warning : TC.tone.success;
+
+    return (
+        <section className="mb-4 grid gap-3 lg:grid-cols-[1.1fr_1fr_1fr]">
+            <ReadinessTile
+                icon={FiShield}
+                label="Session"
+                title={accountLabel}
+                detail={lastReplayLabel}
+                tone={TC.tone.success}
+            />
+            <ReadinessTile
+                icon={hasExchangeCredential ? FiCheck : FiAlertTriangle}
+                label="API key"
+                title={credentialLabel}
+                detail={hasExchangeCredential ? "Scoped to Binance Spot Testnet" : "Trading is disabled until a key is linked"}
+                tone={hasExchangeCredential ? TC.tone.success : TC.tone.warning}
+            />
+            <div className={`${TC.panel} flex items-center justify-between gap-3 px-4 py-3`}>
+                <div className="min-w-0">
+                    <div className={`text-[10px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>Account data</div>
+                    <div className={`mt-1 flex items-center gap-2 text-sm font-semibold ${balanceTone}`}>
+                        {balancesError ? <FiAlertTriangle className="h-4 w-4" /> : balancesLoading ? <FiRefreshCw className="h-4 w-4 animate-spin" /> : <FiActivity className="h-4 w-4" />}
+                        <span className="truncate">{balancesError || (balancesLoading ? "Refreshing balances" : "Balances ready")}</span>
+                    </div>
+                    <div className={`mt-1 text-xs ${connectionTone}`}>{connectionLabel}</div>
+                </div>
+                <button
+                    type="button"
+                    onClick={onRefresh}
+                    className={`flex h-9 w-9 items-center justify-center ${TC.iconButton}`}
+                    title="Refresh account state"
+                >
+                    <FiRefreshCw className="h-4 w-4" />
+                </button>
+            </div>
+        </section>
+    );
+}
+
+function ReadinessTile({ icon: Icon, label, title, detail, tone }) {
+    return (
+        <div className={`${TC.panel} flex items-center gap-3 px-4 py-3`}>
+            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-current/20 ${tone}`}>
+                <Icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+                <div className={`text-[10px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>{label}</div>
+                <div className="mt-1 truncate text-sm font-semibold">{title}</div>
+                <div className={`mt-0.5 truncate text-xs ${TC.text.muted}`}>{detail}</div>
+            </div>
+        </div>
+    );
+}
+
+function MarketSwitcher({ favoriteRows, filter, onFilterChange, onSelectSymbol, pinned, rows, selectedSymbol, togglePin, totalSymbols }) {
+    const displayRows = rows.length ? rows : favoriteRows;
+
+    return (
+        <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+                <div className={`flex min-w-[220px] items-center gap-2 px-3 py-2 ${TC.input}`}>
+                    <FiSearch className="h-4 w-4 shrink-0 text-neutral-500" />
+                    <input
+                        className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
+                        value={filter}
+                        onChange={(event) => onFilterChange(event.target.value)}
+                        placeholder="Search BTCUSDT"
+                    />
+                    <FiChevronDown className="h-4 w-4 shrink-0 text-neutral-500" />
+                </div>
+                <button
+                    type="button"
+                    onClick={() => togglePin(selectedSymbol)}
+                    className={`flex h-9 w-9 items-center justify-center ${TC.iconButton} ${pinned.has(selectedSymbol) ? TC.tone.warning : ""}`}
+                    title={pinned.has(selectedSymbol) ? "Remove favorite" : "Favorite market"}
+                >
+                    <FiStar className={pinned.has(selectedSymbol) ? "fill-current" : ""} />
+                </button>
+            </div>
+            <div className="mt-2 flex max-w-[560px] gap-1 overflow-x-auto pb-1 scrollbar-hide">
+                {displayRows.slice(0, 8).map(([sym, value]) => (
+                    <button
+                        key={sym}
+                        type="button"
+                        onClick={() => onSelectSymbol(sym)}
+                        className={`shrink-0 rounded border px-2.5 py-1 text-left text-[11px] transition-colors ${sym === selectedSymbol ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-neutral-200 dark:border-white/10"}`}
+                    >
+                        <span className="font-semibold">{sym}</span>
+                        <span className={`ml-2 font-mono ${TC.text.muted}`}>{value?.price ? formatPriceValue(value.price) : "—"}</span>
+                    </button>
+                ))}
+                {displayRows.length === 0 && (
+                    <div className={`rounded border border-neutral-200 px-2.5 py-1 text-[11px] dark:border-white/10 ${TC.text.muted}`}>
+                        Waiting for markets · {totalSymbols} tracked
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function OrderTicketContent({
+    apiMsg,
+    baseAsset,
+    baseFree,
+    blockingReason,
+    currentPrice,
+    estimatedTotal,
+    formErrors,
+    handlePercentSize,
+    isPlacingOrder,
+    limitPrice,
+    onPlaceOrder,
+    orderNoticeTone,
+    orderSizingMode,
+    orderSubmitDisabled,
+    orderType,
+    previewBaseQty,
+    previewNotional,
+    quoteAsset,
+    quoteFree,
+    quoteOrderQty,
+    requiresLimitPrice,
+    requiresStopPrice,
+    requiresTimeInForce,
+    selectedSymbol,
+    setFormErrors,
+    setLimitPrice,
+    setOrderSizingMode,
+    setOrderType,
+    setQty,
+    setQuoteOrderQty,
+    setSide,
+    setStopPrice,
+    setTimeInForce,
+    side,
+    stopPrice,
+    symbolInfo,
+    symbolInfoError,
+    symbolInfoStatus,
+    timeInForce,
+    usesQuoteSizing,
+    qty,
+}) {
+    const submitLabel = isPlacingOrder ? "Submitting..." : `${side === "BUY" ? "Buy" : "Sell"} ${baseAsset}`;
+
+    return (
+        <div className="p-4 sm:p-5">
+            <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                    <h2 className="text-sm font-semibold tracking-tight">Order ticket</h2>
+                    <div className={`mt-1 text-xs ${TC.text.muted}`}>{selectedSymbol} · Spot Testnet</div>
+                </div>
+                <div className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${side === "BUY" ? TC.side.buyBadge : TC.side.sellBadge}`}>
+                    {side}
+                </div>
+            </div>
+
+            <div className={`mb-4 grid grid-cols-2 gap-1 p-1 ${TC.segment}`}>
+                {["BUY", "SELL"].map((value) => (
+                    <button
+                        key={value}
+                        type="button"
+                        onClick={() => setSide(value)}
+                        className={`py-2 text-sm font-semibold rounded-md transition-all ${side === value
+                            ? `${TC.segmentActive} ${value === "BUY" ? TC.side.buyActive : TC.side.sellActive}`
+                            : TC.segmentInactive}`}
+                    >
+                        {value}
+                    </button>
+                ))}
+            </div>
+
+            <div className="mb-4 flex gap-3 overflow-x-auto border-b border-neutral-200 pb-2 dark:border-white/5">
+                {ORDER_TYPE_TABS.map((type) => {
+                    const isActive = orderType === type;
+                    return (
+                        <button
+                            key={type}
+                            type="button"
+                            onClick={() => {
+                                setOrderType(type);
+                                if (!LIMIT_PRICE_ORDER_TYPES.has(type)) setLimitPrice("");
+                                if (!STOP_PRICE_ORDER_TYPES.has(type)) setStopPrice("");
+                                if (!TIME_IN_FORCE_ORDER_TYPES.has(type)) setTimeInForce("GTC");
+                                setFormErrors({});
+                            }}
+                            className={`whitespace-nowrap border-b-2 pb-2 text-xs font-medium transition-colors ${isActive ? TC.tab.active : TC.tab.inactive}`}
+                        >
+                            {ORDER_TYPE_LABELS[type] || type}
+                        </button>
+                    );
+                })}
+            </div>
+
+            <div className="space-y-4">
+                {orderType === "MARKET" && (
+                    <div>
+                        <div className={`mb-1.5 text-xs ${TC.text.muted}`}>Size by</div>
+                        <div className={`grid grid-cols-2 gap-1 p-1 ${TC.segment}`}>
+                            {[
+                                ["BASE", baseAsset],
+                                ["QUOTE", quoteAsset],
+                            ].map(([mode, label]) => (
+                                <button
+                                    key={mode}
+                                    type="button"
+                                    onClick={() => {
+                                        setOrderSizingMode(mode);
+                                        setFormErrors((prev) => ({ ...prev, qty: undefined, quoteOrderQty: undefined, notional: undefined, balance: undefined }));
+                                    }}
+                                    className={`py-2 text-xs font-semibold rounded-md transition-all ${orderSizingMode === mode ? TC.segmentActive : TC.segmentInactive}`}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {requiresLimitPrice && (
+                    <OrderInput
+                        error={formErrors.limitPrice}
+                        label="Limit price"
+                        onChange={(value) => {
+                            setLimitPrice(value);
+                            setFormErrors((prev) => ({ ...prev, limitPrice: undefined, notional: undefined, balance: undefined }));
+                        }}
+                        placeholder="Enter limit price"
+                        suffix={quoteAsset}
+                        value={limitPrice}
+                    />
+                )}
+
+                {requiresStopPrice && (
+                    <OrderInput
+                        error={formErrors.stopPrice}
+                        label="Stop price"
+                        onChange={(value) => {
+                            setStopPrice(value);
+                            setFormErrors((prev) => ({ ...prev, stopPrice: undefined, notional: undefined, balance: undefined }));
+                        }}
+                        placeholder="Enter stop trigger"
+                        suffix={quoteAsset}
+                        value={stopPrice}
+                    />
+                )}
+
+                {requiresTimeInForce && (
+                    <div>
+                        <div className={`mb-1.5 text-xs ${TC.text.muted}`}>Time in force</div>
+                        <div className={`grid grid-cols-3 gap-1 p-1 ${TC.segment}`}>
+                            {TIME_IN_FORCE_OPTIONS.map((option) => (
+                                <button
+                                    key={option}
+                                    type="button"
+                                    onClick={() => {
+                                        setTimeInForce(option);
+                                        setFormErrors((prev) => ({ ...prev, timeInForce: undefined }));
+                                    }}
+                                    className={`py-2 text-xs font-semibold rounded-md transition-all ${timeInForce === option ? TC.segmentActive : TC.segmentInactive}`}
+                                >
+                                    {option}
+                                </button>
+                            ))}
+                        </div>
+                        {formErrors.timeInForce && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.timeInForce}</div>}
+                    </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3">
+                    <OrderInput
+                        error={formErrors.qty || formErrors.quoteOrderQty}
+                        label={usesQuoteSizing ? "Quote amount" : "Quantity"}
+                        onChange={(value) => {
+                            if (usesQuoteSizing) {
+                                setQuoteOrderQty(value);
+                                setFormErrors((prev) => ({ ...prev, quoteOrderQty: undefined, notional: undefined, balance: undefined }));
+                            } else {
+                                setQty(value);
+                                setFormErrors((prev) => ({ ...prev, qty: undefined, notional: undefined, balance: undefined }));
+                            }
+                        }}
+                        placeholder="0.00"
+                        suffix={usesQuoteSizing ? quoteAsset : baseAsset}
+                        value={usesQuoteSizing ? quoteOrderQty : qty}
+                    />
+                    <div>
+                        <div className={`mb-1.5 text-xs ${TC.text.muted}`}>Est. total</div>
+                        <div className={`flex items-center px-3 py-2.5 ${TC.readonlyInput}`}>
+                            <input className="min-w-0 flex-1 cursor-default bg-transparent font-mono text-sm outline-none" disabled readOnly value={estimatedTotal} />
+                            <span className="text-xs font-medium opacity-70">{quoteAsset}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <div className={`mb-1.5 text-xs ${TC.text.muted}`}>Percent sizing</div>
+                    <div className="grid grid-cols-4 gap-1">
+                        {ORDER_PERCENT_PRESETS.map((percent) => (
+                            <button
+                                key={percent}
+                                type="button"
+                                onClick={() => handlePercentSize(percent)}
+                                className={`rounded border border-neutral-200 py-1.5 text-xs font-semibold transition-colors dark:border-white/10 ${TC.secondaryButton}`}
+                            >
+                                {percent}%
+                            </button>
+                        ))}
+                    </div>
+                    <div className={`mt-2 flex items-center justify-between text-[11px] ${TC.text.muted}`}>
+                        <span>{quoteAsset} free <span className="font-mono">{formatAmount(quoteFree)}</span></span>
+                        <span>{baseAsset} free <span className="font-mono">{formatAmount(baseFree)}</span></span>
+                    </div>
+                </div>
+
+                <OrderPreview
+                    baseAsset={baseAsset}
+                    currentPrice={currentPrice}
+                    orderType={orderType}
+                    previewBaseQty={previewBaseQty}
+                    previewNotional={previewNotional}
+                    quoteAsset={quoteAsset}
+                    side={side}
+                    timeInForce={requiresTimeInForce ? timeInForce : null}
+                />
+
+                {formErrors.notional && <div className={`text-xs font-medium ${TC.tone.danger}`}>{formErrors.notional}</div>}
+                {formErrors.base && <div className={`text-xs font-medium ${TC.tone.danger}`}>{formErrors.base}</div>}
+
+                <SymbolFilterSummary orderType={orderType} status={symbolInfoStatus} symbolInfo={symbolInfo} />
+
+                {symbolInfoStatus === "error" && (
+                    <div className={`rounded bg-rose-500/10 p-2 text-xs ${TC.tone.danger}`}>{symbolInfoError}</div>
+                )}
+
+                {(blockingReason || apiMsg) && (
+                    <div className={`flex items-start gap-2 rounded-lg border border-current/20 px-3 py-2 text-xs ${orderNoticeTone}`}>
+                        {blockingReason ? <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> : <FiInfo className="mt-0.5 h-4 w-4 shrink-0" />}
+                        <span>{blockingReason || apiMsg}</span>
+                    </div>
+                )}
+
+                <button
+                    type="button"
+                    onClick={onPlaceOrder}
+                    disabled={orderSubmitDisabled}
+                    className={`w-full rounded-lg py-3.5 text-sm font-bold text-white transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 ${side === "BUY" ? "bg-emerald-500 hover:bg-emerald-400" : "bg-rose-500 hover:bg-rose-400"}`}
+                >
+                    {submitLabel}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function OrderInput({ error, label, onChange, placeholder, suffix, value }) {
+    return (
+        <div>
+            <div className={`mb-1.5 text-xs ${TC.text.muted}`}>{label}</div>
+            <div className={`flex items-center px-3 py-2.5 transition-all ${TC.input}`}>
+                <input
+                    className="min-w-0 flex-1 bg-transparent font-mono text-sm outline-none"
+                    inputMode="decimal"
+                    onChange={(event) => onChange(event.target.value)}
+                    placeholder={placeholder}
+                    value={value}
+                />
+                <span className="ml-2 shrink-0 text-xs font-medium text-neutral-500">{suffix}</span>
+            </div>
+            {error && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{error}</div>}
+        </div>
+    );
+}
+
+function OrderPreview({ baseAsset, currentPrice, orderType, previewBaseQty, previewNotional, quoteAsset, side, timeInForce }) {
+    const rows = [
+        ["Side", side],
+        ["Type", ORDER_TYPE_LABELS[orderType] || orderType],
+        ["Est. base", previewBaseQty !== null ? `${formatAmount(previewBaseQty)} ${baseAsset}` : "—"],
+        ["Est. notional", previewNotional !== null ? `${formatPriceValue(previewNotional)} ${quoteAsset}` : "—"],
+        ["Mark", formatPriceValue(currentPrice)],
+    ];
+    if (timeInForce) rows.push(["TIF", timeInForce]);
+
+    return (
+        <div className="rounded-lg border border-neutral-200 bg-neutral-50/60 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className={`mb-2 text-[11px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>Order preview</div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                {rows.map(([label, value]) => (
+                    <div key={label} className="min-w-0">
+                        <div className={`text-[10px] ${TC.text.muted}`}>{label}</div>
+                        <div className="truncate font-mono text-[11px] font-semibold">{value}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function PortfolioPanel({
+    balancesError,
+    balancesLoading,
+    balancesUpdatedAt,
+    baseAsset,
+    baseFree,
+    baseLocked,
+    hasExchangeCredential,
+    onRefresh,
+    onSelectSymbol,
+    portfolioRows,
+    quoteAsset,
+    quoteFree,
+    quoteLocked,
+    totalPortfolioValue,
+}) {
+    return (
+        <BalancesPanel>
+            <div className="mb-4 flex items-center justify-between">
+                <div>
+                    <h3 className="text-sm font-semibold tracking-tight">Portfolio</h3>
+                    <div className={`mt-1 text-xs ${TC.text.muted}`}>Free and locked balances</div>
+                </div>
+                <button
+                    type="button"
+                    onClick={onRefresh}
+                    disabled={balancesLoading || !hasExchangeCredential}
+                    className={`flex h-8 w-8 items-center justify-center disabled:opacity-40 ${TC.iconButton}`}
+                    title="Refresh balances"
+                >
+                    <FiRefreshCw className={`h-4 w-4 ${balancesLoading ? "animate-spin" : ""}`} />
+                </button>
+            </div>
+
+            {!hasExchangeCredential && (
+                <div className={`mb-3 rounded-lg border border-current/20 p-3 text-xs ${TC.tone.warning}`}>
+                    API keys are required before TradeCO can request account balances.
+                </div>
+            )}
+            {balancesError && <div className={`mb-3 rounded-lg border border-current/20 p-3 text-xs ${TC.tone.danger}`}>{balancesError}</div>}
+
+            <div className="mb-3 grid grid-cols-2 gap-2">
+                <BalanceStat label={`${quoteAsset} free`} value={formatAmount(quoteFree)} />
+                <BalanceStat label={`${baseAsset} free`} value={formatAmount(baseFree)} />
+                <BalanceStat label={`${quoteAsset} locked`} value={formatAmount(quoteLocked)} />
+                <BalanceStat label={`${baseAsset} locked`} value={formatAmount(baseLocked)} />
+            </div>
+
+            <div className="rounded-lg border border-neutral-200 dark:border-white/10">
+                <div className="grid grid-cols-[0.8fr_1fr_1fr] border-b border-neutral-200 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:border-white/10">
+                    <span>Asset</span>
+                    <span className="text-right">Free</span>
+                    <span className="text-right">Locked</span>
+                </div>
+                <div className="max-h-72 overflow-auto custom-scrollbar">
+                    {portfolioRows.length === 0 ? (
+                        <div className={`px-3 py-8 text-center text-xs ${TC.text.muted}`}>No balances returned yet</div>
+                    ) : portfolioRows.map((row) => (
+                        <button
+                            key={row.asset}
+                            type="button"
+                            onClick={() => row.asset !== quoteAsset && onSelectSymbol(`${row.asset}${quoteAsset}`)}
+                            className="grid w-full grid-cols-[0.8fr_1fr_1fr] items-center border-b border-neutral-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-neutral-50 dark:border-white/5 dark:hover:bg-white/5"
+                        >
+                            <span className="font-semibold">{row.asset}</span>
+                            <span className="text-right font-mono">{formatAmount(row.free)}</span>
+                            <span className="text-right font-mono text-neutral-500">{formatAmount(row.locked)}</span>
+                            {row.estimatedValue !== null && (
+                                <span className="col-span-3 mt-0.5 text-right text-[10px] text-neutral-500">≈ {formatPriceValue(row.estimatedValue)} {quoteAsset}</span>
+                            )}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between text-xs">
+                <span className={TC.text.muted}>Est. total value</span>
+                <span className="font-mono font-semibold">{formatPriceValue(totalPortfolioValue)} {quoteAsset}</span>
+            </div>
+            {balancesUpdatedAt && <div className={`mt-2 text-right text-[10px] ${TC.text.muted}`}>Updated {new Date(balancesUpdatedAt).toLocaleTimeString()}</div>}
+        </BalancesPanel>
+    );
+}
+
+function BalanceStat({ label, value }) {
+    return (
+        <div className="rounded-lg border border-neutral-200 bg-neutral-50/60 px-3 py-2 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className={`text-[10px] uppercase tracking-wide ${TC.text.muted}`}>{label}</div>
+            <div className="mt-1 truncate font-mono text-xs font-semibold">{value}</div>
         </div>
     );
 }
@@ -2417,11 +3084,270 @@ function MarketMicrostructurePanel({ error, orderBook, selectedSymbol, tradeTape
 
             {error && <div className={`px-4 pt-3 text-xs ${TC.tone.danger}`}>{error}</div>}
 
-            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+            <div className="grid min-h-0 flex-1 grid-rows-[minmax(220px,1fr)_minmax(160px,0.82fr)] overflow-hidden">
                 <OrderBookView asks={orderBook?.asks || []} bids={orderBook?.bids || []} />
                 <TradeTapeView trades={tradeTape} />
             </div>
         </TerminalPanel>
+    );
+}
+
+function TerminalWorkspace({
+    activeTab,
+    cancelAllOpenOrders,
+    cancelingOrderId,
+    copyOrderId,
+    fillReadyRows,
+    filter,
+    historyOrderRows,
+    isDark,
+    marketBoard,
+    onOpenOrder,
+    onRefreshOrders,
+    onSelectSymbol,
+    openOrdersError,
+    openOrdersLoading,
+    openOrderRows,
+    ordersCursor,
+    ordersCurrentPage,
+    ordersError,
+    ordersIsFirstPage,
+    ordersIsLastPage,
+    ordersLoading,
+    ordersNextCursor,
+    ordersPrevStack,
+    ordersTotalEntries,
+    ordersWorkspaceView,
+    pinned,
+    positionsCurrentPage,
+    positionsCursor,
+    positionsError,
+    positionsIsFirstPage,
+    positionsIsLastPage,
+    positionsLoading,
+    positionsNextCursor,
+    positionsPage,
+    positionsTotalEntries,
+    setActiveTab,
+    setFilter,
+    setOrdersCursor,
+    setOrdersPrevStack,
+    setOrdersWorkspaceView,
+    setPositionsCursor,
+    setPositionsPrevStack,
+    shown,
+    togglePin,
+    totalSymbols,
+    fetchOrdersPage,
+    fetchPositionsPage,
+}) {
+    const workspaceTabs = [
+        { id: "orders", label: "Orders", icon: FiList },
+        { id: "trades", label: "Markets", icon: FiBarChart2 },
+        { id: "positions", label: "Positions", icon: FiLayers },
+    ];
+
+    return (
+        <>
+            <div className="flex flex-col gap-3 border-b border-neutral-100 px-4 pt-4 pb-3 dark:border-white/5 md:flex-row md:items-center md:justify-between">
+                <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                    {workspaceTabs.map((tab) => {
+                        const Icon = tab.icon;
+                        return (
+                            <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => setActiveTab(tab.id)}
+                                className={`flex shrink-0 items-center gap-2 border-b-2 px-1 pb-2 text-sm font-medium transition-colors ${activeTab === tab.id ? TC.tab.activeAccent : TC.tab.inactive}`}
+                            >
+                                <Icon className="h-4 w-4" />
+                                {tab.label}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {activeTab === "trades" && (
+                    <div className={`flex w-full items-center px-2 py-1.5 md:w-auto ${TC.input}`}>
+                        <FiSearch className="mr-2 h-3.5 w-3.5 shrink-0 text-neutral-500" />
+                        <input
+                            className="w-full bg-transparent text-xs outline-none md:w-44"
+                            value={filter}
+                            onChange={(event) => setFilter(event.target.value)}
+                            placeholder={`Search ${totalSymbols || ""} symbols`}
+                        />
+                    </div>
+                )}
+
+                {activeTab === "orders" && (
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className={`grid grid-cols-3 gap-1 p-1 ${TC.segment}`}>
+                            {[
+                                ["open", "Open"],
+                                ["history", "History"],
+                                ["fills", "Fills"],
+                            ].map(([id, label]) => (
+                                <button
+                                    key={id}
+                                    type="button"
+                                    onClick={() => setOrdersWorkspaceView(id)}
+                                    className={`rounded-md px-3 py-1.5 text-xs font-semibold ${ordersWorkspaceView === id ? TC.segmentActive : TC.segmentInactive}`}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={onRefreshOrders}
+                            className={`flex h-8 w-8 items-center justify-center ${TC.iconButton}`}
+                            title="Refresh orders"
+                        >
+                            <FiRefreshCw className={`h-4 w-4 ${openOrdersLoading || ordersLoading ? "animate-spin" : ""}`} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={cancelAllOpenOrders}
+                            disabled={openOrderRows.length === 0 || cancelingOrderId === "__all__"}
+                            className={`flex h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold disabled:opacity-40 ${TC.secondaryButton}`}
+                            title="Cancel all open orders for selected symbol"
+                        >
+                            <FiTrash2 className="h-3.5 w-3.5" />
+                            Cancel selected
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            <div className="relative flex-1 overflow-hidden">
+                <div className="absolute inset-0 overflow-auto custom-scrollbar">
+                    <table className="w-full text-left text-sm">
+                        <thead className={`sticky top-0 z-10 text-xs uppercase tracking-wider ${TC.tableHeader}`}>
+                            <tr>
+                                {activeTab === "positions" && ["Symbol", "Size", "Entry", "Mark", "Realized PnL", "Unrealized PnL"].map((heading) => <th key={heading} className="px-5 py-3 font-medium whitespace-nowrap">{heading}</th>)}
+                                {activeTab === "orders" && ordersWorkspaceView !== "fills" && ["ID", "Symbol", "Side", "Type", "Qty/Quote", "Price", "Status"].map((heading) => <th key={heading} className="px-5 py-3 font-medium whitespace-nowrap">{heading}</th>)}
+                                {activeTab === "orders" && ordersWorkspaceView === "fills" && ["ID", "Symbol", "Side", "Executed", "Avg fill", "Quote filled", "Last update"].map((heading) => <th key={heading} className="px-5 py-3 font-medium whitespace-nowrap">{heading}</th>)}
+                                {activeTab === "trades" && ["Pin", "Symbol", "Price", "Time"].map((heading) => <th key={heading} className="px-5 py-3 font-medium whitespace-nowrap">{heading}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-neutral-100 dark:divide-white/5">
+                            {activeTab === "positions" && (
+                                <PositionsTableRows
+                                    marketBoard={marketBoard}
+                                    positionsError={positionsError}
+                                    positionsLoading={positionsLoading}
+                                    positionsPage={positionsPage}
+                                    onSelectSymbol={onSelectSymbol}
+                                />
+                            )}
+                            {activeTab === "orders" && ordersWorkspaceView === "open" && (
+                                <OrdersTableRows
+                                    copyOrderId={copyOrderId}
+                                    emptyLabel="No open orders"
+                                    error={openOrdersError}
+                                    isDark={isDark}
+                                    loading={openOrdersLoading}
+                                    onOpenOrder={onOpenOrder}
+                                    onSelectSymbol={onSelectSymbol}
+                                    rows={openOrderRows}
+                                />
+                            )}
+                            {activeTab === "orders" && ordersWorkspaceView === "history" && (
+                                <OrdersTableRows
+                                    copyOrderId={copyOrderId}
+                                    emptyLabel="No order history"
+                                    error={ordersError}
+                                    isDark={isDark}
+                                    loading={ordersLoading}
+                                    onOpenOrder={onOpenOrder}
+                                    onSelectSymbol={onSelectSymbol}
+                                    rows={historyOrderRows}
+                                />
+                            )}
+                            {activeTab === "orders" && ordersWorkspaceView === "fills" && (
+                                <FillsTableRows
+                                    emptyLabel="No fills yet"
+                                    loading={ordersLoading}
+                                    onOpenOrder={onOpenOrder}
+                                    onSelectSymbol={onSelectSymbol}
+                                    rows={fillReadyRows}
+                                />
+                            )}
+                            {activeTab === "trades" && (
+                                <MarketBoardRows
+                                    pinned={pinned}
+                                    shown={shown}
+                                    togglePin={togglePin}
+                                    onSelectSymbol={onSelectSymbol}
+                                />
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {(activeTab === "positions" || (activeTab === "orders" && ordersWorkspaceView === "history")) && (
+                <div className="flex items-center justify-between border-t border-neutral-100 p-2 dark:border-white/10">
+                    <div className="text-xs text-neutral-500">
+                        {activeTab === "positions" ? positionsTotalEntries : ordersTotalEntries} items
+                    </div>
+                    <div className="flex gap-2">
+                        <button
+                            type="button"
+                            className={`flex h-8 w-8 items-center justify-center disabled:opacity-30 ${TC.iconButton}`}
+                            onClick={() => activeTab === "positions" ? fetchPositionsPage(positionsCursor) : fetchOrdersPage(ordersCursor)}
+                            disabled={activeTab === "positions" ? positionsLoading : ordersLoading}
+                            title="Refresh page"
+                        >
+                            <FiRefreshCw className="h-4 w-4" />
+                        </button>
+                        <button
+                            type="button"
+                            className={`flex h-8 w-8 items-center justify-center disabled:opacity-30 ${TC.iconButton}`}
+                            disabled={activeTab === "positions" ? positionsIsFirstPage : ordersIsFirstPage || ordersPrevStack.length === 0}
+                            onClick={() => {
+                                if (activeTab === "positions") {
+                                    setPositionsPrevStack((prev) => {
+                                        const next = [...prev];
+                                        setPositionsCursor(next.pop() || null);
+                                        return next;
+                                    });
+                                } else {
+                                    setOrdersPrevStack((prev) => {
+                                        const next = [...prev];
+                                        setOrdersCursor(next.pop() || null);
+                                        return next;
+                                    });
+                                }
+                            }}
+                            title="Previous page"
+                        >
+                            <FiArrowLeft className="h-4 w-4" />
+                        </button>
+                        <span className="flex items-center px-2 text-xs text-neutral-500">
+                            Page {activeTab === "positions" ? positionsCurrentPage : ordersCurrentPage}
+                        </span>
+                        <button
+                            type="button"
+                            className={`flex h-8 w-8 items-center justify-center disabled:opacity-30 ${TC.iconButton}`}
+                            disabled={activeTab === "positions" ? (!positionsNextCursor || positionsIsLastPage) : (!ordersNextCursor || ordersIsLastPage)}
+                            onClick={() => {
+                                if (activeTab === "positions" && positionsNextCursor) {
+                                    setPositionsPrevStack((previous) => [...previous, positionsCursor]);
+                                    setPositionsCursor(positionsNextCursor);
+                                } else if (activeTab === "orders" && ordersNextCursor) {
+                                    setOrdersPrevStack((previous) => [...previous, ordersCursor]);
+                                    setOrdersCursor(ordersNextCursor);
+                                }
+                            }}
+                            title="Next page"
+                        >
+                            <FiArrowRight className="h-4 w-4" />
+                        </button>
+                    </div>
+                </div>
+            )}
+        </>
     );
 }
 
@@ -2430,26 +3356,28 @@ function OrderBookView({ asks, bids }) {
     const topBids = bids.slice(0, 10);
 
     return (
-        <div className="min-w-0 border-b border-neutral-100 p-4 dark:border-white/5">
-            <div className={`grid grid-cols-3 pb-2 text-[11px] font-medium uppercase ${TC.text.muted}`}>
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-b border-neutral-100 dark:border-white/5">
+            <div className={`grid grid-cols-3 px-4 pb-2 pt-4 text-[11px] font-medium uppercase ${TC.text.muted}`}>
                 <span>Price</span>
                 <span className="text-right">Size</span>
                 <span className="text-right">Total</span>
             </div>
-            <div className="space-y-1">
-                {topAsks.length === 0 ? (
-                    <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for asks</div>
-                ) : topAsks.map(([price, quantity]) => (
-                    <BookLevelRow key={`ask-${price}-${quantity}`} price={price} quantity={quantity} side="SELL" />
-                ))}
-            </div>
-            <div className="my-2 h-px bg-neutral-100 dark:bg-white/5" />
-            <div className="space-y-1">
-                {topBids.length === 0 ? (
-                    <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for bids</div>
-                ) : topBids.map(([price, quantity]) => (
-                    <BookLevelRow key={`bid-${price}-${quantity}`} price={price} quantity={quantity} side="BUY" />
-                ))}
+            <div className="custom-scrollbar min-h-0 flex-1 overflow-auto px-4 pb-4 pr-3">
+                <div className="space-y-1">
+                    {topAsks.length === 0 ? (
+                        <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for asks</div>
+                    ) : topAsks.map(([price, quantity]) => (
+                        <BookLevelRow key={`ask-${price}-${quantity}`} price={price} quantity={quantity} side="SELL" />
+                    ))}
+                </div>
+                <div className="my-2 h-px bg-neutral-100 dark:bg-white/5" />
+                <div className="space-y-1">
+                    {topBids.length === 0 ? (
+                        <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for bids</div>
+                    ) : topBids.map(([price, quantity]) => (
+                        <BookLevelRow key={`bid-${price}-${quantity}`} price={price} quantity={quantity} side="BUY" />
+                    ))}
+                </div>
             </div>
         </div>
     );
@@ -2468,13 +3396,13 @@ function BookLevelRow({ price, quantity, side }) {
 
 function TradeTapeView({ trades }) {
     return (
-        <div className="min-w-0 overflow-hidden p-4">
-            <div className={`grid grid-cols-3 pb-2 text-[11px] font-medium uppercase ${TC.text.muted}`}>
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+            <div className={`grid grid-cols-3 px-4 pb-2 pt-4 text-[11px] font-medium uppercase ${TC.text.muted}`}>
                 <span>Price</span>
                 <span className="text-right">Size</span>
                 <span className="text-right">Time</span>
             </div>
-            <div className="custom-scrollbar max-h-[240px] space-y-1 overflow-auto pr-1">
+            <div className="custom-scrollbar min-h-0 flex-1 space-y-1 overflow-auto px-4 pb-4 pr-3">
                 {trades.length === 0 ? (
                     <div className={`py-5 text-center text-xs ${TC.text.muted}`}>Waiting for trades</div>
                 ) : trades.slice(0, 30).map((trade) => (
@@ -2532,40 +3460,93 @@ function PositionsTableRows({ marketBoard, positionsError, positionsLoading, pos
     });
 }
 
-function OrdersTableRows({ copyOrderId, isDark, ordersById, ordersLoading, ordersPage, onSelectSymbol }) {
-    if (ordersLoading) {
-        return <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">Loading orders...</td></tr>;
+function OrdersTableRows({ copyOrderId, emptyLabel, error, isDark, loading, onOpenOrder, onSelectSymbol, rows }) {
+    if (loading) {
+        return <tr><td colSpan={7} className="px-5 py-8 text-center text-neutral-500">Loading orders...</td></tr>;
     }
 
-    if (ordersPage.length === 0) {
-        return <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">No order history</td></tr>;
+    if (error) {
+        return <tr><td colSpan={7} className={`px-5 py-8 text-center ${TC.tone.danger}`}>{error}</td></tr>;
     }
 
-    return ordersPage.map((order) => {
-        const status = ordersById[order.orderId]?.status || order.status;
+    if (rows.length === 0) {
+        return <tr><td colSpan={7} className="px-5 py-8 text-center text-neutral-500">{emptyLabel}</td></tr>;
+    }
 
-        return (
-            <tr key={order.orderId} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
-                <td className="px-5 py-3 font-mono text-xs text-neutral-500 flex items-center gap-2">
-                    {String(order.orderId).slice(0, 8)}...
-                    <CopyOrderButton orderId={order.orderId} isDark={isDark} onCopy={copyOrderId} />
-                </td>
-                <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(order.symbol)}>{order.symbol}</td>
-                <td className="px-5 py-3">
-                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${order.side === "BUY" ? TC.side.buyBadge : TC.side.sellBadge}`}>
-                        {order.side}
-                    </span>
-                </td>
-                <td className="px-5 py-3 text-neutral-500 text-xs">{order.orderType}</td>
-                <td className="px-5 py-3 font-mono">{order.quantity}</td>
-                <td className="px-5 py-3 text-xs font-medium">
-                    <span className={`px-2 py-1 rounded border ${status === "FILLED" ? TC.status.filled : status === "CANCELED" ? TC.status.cancelled : TC.status.pending}`}>
-                        {status}
-                    </span>
-                </td>
-            </tr>
-        );
-    });
+    return rows.map((order) => (
+        <tr key={order.orderId} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
+            <td className="px-5 py-3">
+                <button
+                    type="button"
+                    onClick={() => onOpenOrder(order)}
+                    className={`inline-flex items-center gap-2 font-mono text-xs ${TC.symbolLink}`}
+                >
+                    {shortOrderId(order.orderId)}
+                </button>
+                <CopyOrderButton orderId={order.orderId} isDark={isDark} onCopy={copyOrderId} />
+            </td>
+            <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(order.symbol)}>{order.symbol}</td>
+            <td className="px-5 py-3">
+                <SideBadge side={order.side} />
+            </td>
+            <td className="px-5 py-3 text-xs text-neutral-500">{ORDER_TYPE_LABELS[order.orderType] || order.orderType}</td>
+            <td className="px-5 py-3 font-mono text-xs">
+                {order.quantity ? `${formatAmount(order.quantity)} base` : order.quoteOrderQty ? `${formatAmount(order.quoteOrderQty)} quote` : "—"}
+            </td>
+            <td className="px-5 py-3 font-mono text-xs">{order.price || order.stopPrice ? formatPriceValue(order.price || order.stopPrice) : "Market"}</td>
+            <td className="px-5 py-3 text-xs font-medium">
+                <OrderStatusBadge status={order.status} />
+            </td>
+        </tr>
+    ));
+}
+
+function FillsTableRows({ emptyLabel, loading, onOpenOrder, onSelectSymbol, rows }) {
+    if (loading) {
+        return <tr><td colSpan={7} className="px-5 py-8 text-center text-neutral-500">Loading fills...</td></tr>;
+    }
+
+    if (rows.length === 0) {
+        return <tr><td colSpan={7} className="px-5 py-8 text-center text-neutral-500">{emptyLabel}</td></tr>;
+    }
+
+    return rows.map((order) => (
+        <tr key={`fill-${order.orderId}`} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
+            <td className="px-5 py-3">
+                <button type="button" onClick={() => onOpenOrder(order)} className={`font-mono text-xs ${TC.symbolLink}`}>
+                    {shortOrderId(order.orderId)}
+                </button>
+            </td>
+            <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(order.symbol)}>{order.symbol}</td>
+            <td className="px-5 py-3"><SideBadge side={order.side} /></td>
+            <td className="px-5 py-3 font-mono text-xs">{formatAmount(order.executedQty || order.lastTradeQty || 0)}</td>
+            <td className="px-5 py-3 font-mono text-xs">{formatPriceValue(order.avgFillPrice || order.lastTradePrice)}</td>
+            <td className="px-5 py-3 font-mono text-xs">{formatAmount(order.cummulativeQuoteQty || 0)}</td>
+            <td className="px-5 py-3 text-xs text-neutral-500">{formatDateTime(order.timestamp || order.updatedAt || order.lastExchangeUpdateAt)}</td>
+        </tr>
+    ));
+}
+
+function SideBadge({ side }) {
+    const normalized = String(side || "").toUpperCase();
+    return (
+        <span className={`rounded px-1.5 py-0.5 text-xs font-bold ${normalized === "BUY" ? TC.side.buyBadge : TC.side.sellBadge}`}>
+            {normalized || "—"}
+        </span>
+    );
+}
+
+function OrderStatusBadge({ status }) {
+    const normalized = String(status || "PENDING").toUpperCase();
+    const className = normalized === "FILLED"
+        ? TC.status.filled
+        : normalized === "CANCELED" || normalized === "CANCELLED" || normalized === "EXPIRED"
+            ? TC.status.cancelled
+            : normalized === "REJECTED" || normalized.includes("FAILED")
+                ? `${TC.tone.danger} border-current/30 bg-rose-500/10`
+                : TC.status.pending;
+
+    return <span className={`rounded border px-2 py-1 ${className}`}>{normalized}</span>;
 }
 
 function MarketBoardRows({ pinned, shown, togglePin, onSelectSymbol }) {
@@ -2587,26 +3568,248 @@ function MarketBoardRows({ pinned, shown, togglePin, onSelectSymbol }) {
     ));
 }
 
+function MobileTradeDrawer({ children, onClose, open }) {
+    if (!open) return null;
 
-import { FiCopy, FiCheck, FiArrowRight, FiArrowLeft, FiSun } from "react-icons/fi";
-import { Fi } from "zod/v4/locales";
+    return (
+        <div className="fixed inset-0 z-50 xl:hidden">
+            <button
+                type="button"
+                aria-label="Close trade drawer"
+                className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+                onClick={onClose}
+            />
+            <div className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-hidden rounded-t-2xl border border-white/10 bg-neutral-950 text-white shadow-2xl">
+                <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                    <div>
+                        <div className="text-sm font-semibold">Trade</div>
+                        <div className="text-xs text-neutral-500">Review sizing before submit</div>
+                    </div>
+                    <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 text-neutral-300">
+                        <FiX className="h-4 w-4" />
+                    </button>
+                </div>
+                <div className="max-h-[calc(88vh-64px)] overflow-auto custom-scrollbar pb-[max(env(safe-area-inset-bottom),1rem)]">
+                    {children}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function OrderDetailDrawer({
+    cancelingOrderId,
+    events,
+    error,
+    isDark,
+    loading,
+    onCancelOrder,
+    onClose,
+    onCopy,
+    onSelectSymbol,
+    open,
+    order,
+}) {
+    if (!open) return null;
+
+    const status = String(order?.status || "").toUpperCase();
+    const canCancel = OPEN_ORDER_STATUS_SET.has(status);
+
+    return (
+        <div className="fixed inset-0 z-50">
+            <button
+                type="button"
+                aria-label="Close order detail"
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={onClose}
+            />
+            <aside className={`absolute right-0 top-0 flex h-full w-full max-w-xl flex-col overflow-hidden ${TC.panel} rounded-none border-y-0 border-r-0 shadow-2xl`}>
+                <div className="flex items-start justify-between gap-3 border-b border-neutral-100 px-5 py-4 dark:border-white/10">
+                    <div className="min-w-0">
+                        <div className={`text-[10px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>Order detail</div>
+                        <div className="mt-1 flex items-center gap-2">
+                            <h3 className="truncate font-mono text-sm font-semibold">{order?.orderId || "Loading..."}</h3>
+                            {order?.orderId && <CopyOrderButton orderId={order.orderId} isDark={isDark} onCopy={onCopy} />}
+                        </div>
+                        <div className={`mt-1 text-xs ${TC.text.muted}`}>Lifecycle and fills-ready execution fields</div>
+                    </div>
+                    <button type="button" onClick={onClose} className={`flex h-9 w-9 items-center justify-center ${TC.iconButton}`}>
+                        <FiX className="h-4 w-4" />
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-auto p-5 custom-scrollbar">
+                    {loading && <div className={`rounded-lg border border-neutral-200 p-4 text-sm dark:border-white/10 ${TC.text.muted}`}>Loading order detail...</div>}
+                    {error && <div className={`mb-4 rounded-lg border border-current/20 p-3 text-sm ${TC.tone.danger}`}>{error}</div>}
+
+                    {order && (
+                        <div className="space-y-4">
+                            <div className="grid gap-2 sm:grid-cols-3">
+                                <DetailStat label="Symbol" value={order.symbol || "—"} onClick={() => order.symbol && onSelectSymbol(order.symbol)} />
+                                <DetailStat label="Side" value={order.side || "—"} tone={String(order.side).toUpperCase() === "BUY" ? TC.tone.success : TC.tone.danger} />
+                                <div className="rounded-lg border border-neutral-200 p-3 dark:border-white/10">
+                                    <div className={`text-[10px] uppercase tracking-wide ${TC.text.muted}`}>Status</div>
+                                    <div className="mt-2"><OrderStatusBadge status={status} /></div>
+                                </div>
+                            </div>
+
+                            <div className="grid gap-2 sm:grid-cols-2">
+                                <DetailStat label="Type" value={ORDER_TYPE_LABELS[order.orderType] || order.orderType || "—"} />
+                                <DetailStat label="Time in force" value={order.timeInForce || "—"} />
+                                <DetailStat label="Quantity" value={formatAmount(order.quantity)} />
+                                <DetailStat label="Quote quantity" value={formatAmount(order.quoteOrderQty)} />
+                                <DetailStat label="Limit price" value={formatPriceValue(order.price)} />
+                                <DetailStat label="Stop price" value={formatPriceValue(order.stopPrice)} />
+                            </div>
+
+                            <div className="rounded-lg border border-neutral-200 p-3 dark:border-white/10">
+                                <div className={`mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>
+                                    <FiShoppingCart className="h-3.5 w-3.5" />
+                                    Fill structure
+                                </div>
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <DetailStat label="Executed qty" value={formatAmount(order.executedQty)} />
+                                    <DetailStat label="Avg fill price" value={formatPriceValue(order.avgFillPrice)} />
+                                    <DetailStat label="Cum. quote qty" value={formatAmount(order.cummulativeQuoteQty)} />
+                                    <DetailStat label="Last trade" value={`${formatAmount(order.lastTradeQty)} @ ${formatPriceValue(order.lastTradePrice)}`} />
+                                </div>
+                            </div>
+
+                            {(order.errorCode || order.errorMsg) && (
+                                <div className={`rounded-lg border border-current/20 p-3 text-sm ${TC.tone.danger}`}>
+                                    <div className="font-semibold">{order.errorCode || "Order error"}</div>
+                                    <div className="mt-1 text-xs">{order.errorMsg}</div>
+                                </div>
+                            )}
+
+                            <div className="rounded-lg border border-neutral-200 dark:border-white/10">
+                                <div className={`border-b border-neutral-200 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide dark:border-white/10 ${TC.text.muted}`}>
+                                    Events
+                                </div>
+                                <div className="divide-y divide-neutral-100 dark:divide-white/5">
+                                    {events.length === 0 ? (
+                                        <div className={`px-3 py-6 text-center text-xs ${TC.text.muted}`}>No lifecycle events returned yet</div>
+                                    ) : events.map((event) => (
+                                        <div key={event.id || `${event.status}-${event.timestamp}`} className="grid grid-cols-[1fr_auto] gap-3 px-3 py-2 text-xs">
+                                            <div>
+                                                <OrderStatusBadge status={event.status} />
+                                                <div className={`mt-1 font-mono ${TC.text.muted}`}>{event.id || event.orderId}</div>
+                                            </div>
+                                            <div className="text-right text-neutral-500">{formatDateTime(event.timestamp || event.createdAt)}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-t border-neutral-100 p-4 dark:border-white/10">
+                    <button type="button" onClick={onClose} className={`rounded-lg px-4 py-2 text-sm font-semibold ${TC.secondaryButton}`}>Close</button>
+                    <button
+                        type="button"
+                        onClick={() => order?.orderId && onCancelOrder(order.orderId)}
+                        disabled={!canCancel || cancelingOrderId === order?.orderId}
+                        className="rounded-lg bg-rose-500 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                        {cancelingOrderId === order?.orderId ? "Canceling..." : "Cancel order"}
+                    </button>
+                </div>
+            </aside>
+        </div>
+    );
+}
+
+function DetailStat({ label, onClick, tone, value }) {
+    const content = (
+        <>
+            <div className={`text-[10px] uppercase tracking-wide ${TC.text.muted}`}>{label}</div>
+            <div className={`mt-1 truncate font-mono text-xs font-semibold ${tone || ""}`}>{value || "—"}</div>
+        </>
+    );
+
+    if (onClick) {
+        return (
+            <button type="button" onClick={onClick} className="rounded-lg border border-neutral-200 p-3 text-left hover:bg-neutral-50 dark:border-white/10 dark:hover:bg-white/5">
+                {content}
+            </button>
+        );
+    }
+
+    return <div className="rounded-lg border border-neutral-200 p-3 dark:border-white/10">{content}</div>;
+}
+
+function splitTradingPair(symbol) {
+    const normalized = String(symbol || "").toUpperCase();
+    const quotes = ["USDT", "USDC", "BUSD", "BTC", "ETH", "BNB"];
+    const quote = quotes.find((candidate) => normalized.endsWith(candidate)) || "USDT";
+    const base = normalized.endsWith(quote) ? normalized.slice(0, -quote.length) : normalized.replace(/USDT$/, "");
+    return { base: base || normalized || "BTC", quote };
+}
+
+function formatAmount(value, decimals = 8) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    if (Math.abs(n) >= 1000) return trimNumericZeros(n.toFixed(2));
+    return trimNumericZeros(n.toFixed(decimals));
+}
+
+function formatDateTime(value) {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString();
+}
+
+function shortOrderId(orderId) {
+    const id = String(orderId || "");
+    if (id.length <= 12) return id || "—";
+    return `${id.slice(0, 8)}...`;
+}
+
+function mergeOrderWithRealtime(order, ordersById) {
+    const realtime = ordersById?.[order?.orderId] || {};
+    return { ...order, ...realtime, orderId: order?.orderId || realtime.orderId };
+}
+
+function buildPortfolioRows({ balances, marketBoard, quoteAsset }) {
+    return balances
+        .map((balance) => {
+            const asset = String(balance.asset || "").toUpperCase();
+            const free = Number(balance.free || 0);
+            const locked = Number(balance.locked || 0);
+            const total = free + locked;
+            const symbol = `${asset}${quoteAsset}`;
+            const mark = asset === quoteAsset ? 1 : Number(marketBoard[symbol]?.price || 0);
+            const estimatedValue = Number.isFinite(mark) && mark > 0 ? total * mark : null;
+            return {
+                asset,
+                free: balance.free,
+                locked: balance.locked,
+                estimatedValue,
+                total,
+            };
+        })
+        .filter((row) => row.asset && row.total > 0)
+        .sort((a, b) => {
+            const av = Number.isFinite(a.estimatedValue) ? a.estimatedValue : -1;
+            const bv = Number.isFinite(b.estimatedValue) ? b.estimatedValue : -1;
+            return bv - av;
+        });
+}
 
 const CopyOrderButton = ({ orderId, isDark, onCopy }) => {
     const [copied, setCopied] = useState(false);
 
     const handleClick = () => {
-        // 1. Perform the actual copy action
         if (onCopy) {
             onCopy(orderId);
         } else {
-            // Fallback if no function passed
             navigator.clipboard.writeText(orderId);
         }
 
-        // 2. Trigger the icon change
         setCopied(true);
 
-        // 3. Revert back after 2 seconds
         setTimeout(() => {
             setCopied(false);
         }, 2000);
