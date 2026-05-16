@@ -24,6 +24,7 @@
         "smoke:p0-auth-boundary": "node scripts/p0-auth-boundary-smoke.mjs",
         "smoke:p2-market-order": "node scripts/p2-e2e-market-order-smoke.mjs",
         "smoke:p2-redis-stream": "node scripts/p2-redis-stream-smoke.mjs",
+        "test:api-contracts": "npm --workspace @tradeco/api-contracts run test",
         "test:stream-contracts": "npm --workspace @tradeco/redis-stream-contracts run test"
     }
 }

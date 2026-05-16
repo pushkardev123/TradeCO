@@ -12,6 +12,7 @@ COPY apps/backend/package.json apps/backend/package.json
 COPY apps/event-service/package.json apps/event-service/package.json
 COPY apps/execution-service/package.json apps/execution-service/package.json
 COPY apps/frontend/package.json apps/frontend/package.json
+COPY packages/api-contracts/package.json packages/api-contracts/package.json
 COPY packages/redis-stream-contracts/package.json packages/redis-stream-contracts/package.json
 RUN npm ci
 RUN case "$TARGETARCH" in \

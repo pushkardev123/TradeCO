@@ -9,16 +9,17 @@ import {
     CrosshairMode,
     CandlestickSeries,
 } from "lightweight-charts";
+import { BASIC_ORDER_TYPES, DEFAULT_REALTIME_CHANNELS } from "@tradeco/api-contracts";
 
 import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
 import { CgProfile } from "react-icons/cg";
 
 import { authFetch, bootstrapSession, clearAuth, ensureAccessToken } from "../lib/auth";
 
-const PRICE_CHANNEL = "events:price:update";
-const ORDER_STATUS_CHANNEL = "events:order:status";
-const ACCOUNT_BALANCES_CHANNEL = "events:account:balances";
-const CHARTS_CHANNEL = "events:chart:update";
+const PRICE_CHANNEL = DEFAULT_REALTIME_CHANNELS.prices;
+const ORDER_STATUS_CHANNEL = DEFAULT_REALTIME_CHANNELS.orders;
+const ACCOUNT_BALANCES_CHANNEL = DEFAULT_REALTIME_CHANNELS.balances;
+const CHARTS_CHANNEL = DEFAULT_REALTIME_CHANNELS.charts;
 
 export default function TradePage() {
     const router = useRouter();
@@ -1313,7 +1314,7 @@ export default function TradePage() {
 
                                 {/* Order Type Tabs */}
                                 <div className="flex gap-4 border-b border-neutral-200 dark:border-white/5 mb-6 pb-2 overflow-x-auto">
-                                    {["LIMIT", "MARKET", "STOP_LOSS"].map((t) => {
+                                    {BASIC_ORDER_TYPES.map((t) => {
                                         if (side === "SELL" && t === "STOP_LOSS") return null;
                                         const isActive = orderType === t;
                                         return (

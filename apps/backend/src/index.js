@@ -3,6 +3,13 @@ import cors from "cors";
 import { PrismaClient } from "@prisma/client";
 import { createClient } from "redis";
 import { randomUUID } from "crypto";
+import {
+    CANCEL_IN_FLIGHT_STATUSES,
+    OPEN_ORDER_STATUSES,
+    formatOrderCommandDto,
+    formatOrderEventDto,
+    formatPositionDto,
+} from "@tradeco/api-contracts";
 
 import { verifyAccessToken } from "./jwt.js";
 import { requireAuth } from "./middleware.js";
@@ -53,18 +60,6 @@ app.use(express.json());
 const redis = createClient({ url: REDIS_URL });
 redis.on("error", (e) => console.error("[backend] redis error:", safeErrorMessage(e)));
 
-const OPEN_ORDER_STATUSES = Object.freeze([
-    "RECEIVED",
-    "PENDING",
-    "SUBMITTED",
-    "PARTIALLY_FILLED",
-    "CANCEL_REQUESTED",
-    "CANCEL_PENDING",
-    "CANCEL_REJECTED",
-    "CANCEL_APPEND_FAILED",
-]);
-const CANCEL_IN_FLIGHT_STATUSES = new Set(["CANCEL_REQUESTED", "CANCEL_PENDING"]);
-
 function hasUserIdField(value) {
     return Boolean(
         value &&
@@ -112,15 +107,6 @@ function normalizeSymbolParam(value) {
     return typeof value === "string" ? value.trim().toUpperCase() : "";
 }
 
-function decimalBoundaryString(value) {
-    if (value === undefined || value === null) return null;
-    return String(value);
-}
-
-function timestampBoundaryString(value) {
-    return value?.toISOString?.() || value || null;
-}
-
 function latestEventsByOrderId(events) {
     const latestByOrderId = new Map();
     for (const ev of events) {
@@ -129,46 +115,6 @@ function latestEventsByOrderId(events) {
         }
     }
     return latestByOrderId;
-}
-
-function formatOrderEvent(event) {
-    return {
-        id: event.id,
-        orderId: event.orderId,
-        status: event.status,
-        price: decimalBoundaryString(event.price),
-        quantity: decimalBoundaryString(event.quantity),
-        timestamp: timestampBoundaryString(event.timestamp),
-        createdAt: timestampBoundaryString(event.createdAt),
-    };
-}
-
-function formatOrderCommand(command, latest = null) {
-    return {
-        orderId: command.orderId,
-        symbol: command.symbol,
-        side: command.side,
-        orderType: command.type,
-        quantity: decimalBoundaryString(command.quantity),
-        price: decimalBoundaryString(command.price),
-        stopPrice: decimalBoundaryString(command.stopPrice),
-        timeInForce: command.timeInForce || null,
-        status: latest?.status || command.status,
-        rawStatus: command.rawStatus || null,
-        executedQty: decimalBoundaryString(command.executedQty),
-        cummulativeQuoteQty: decimalBoundaryString(command.cummulativeQuoteQty),
-        avgFillPrice: decimalBoundaryString(command.avgFillPrice),
-        lastTradeQty: decimalBoundaryString(command.lastTradeQty),
-        lastTradePrice: decimalBoundaryString(command.lastTradePrice),
-        binanceOrderId: decimalBoundaryString(command.binanceOrderId),
-        errorCode: command.errorCode || null,
-        errorMsg: command.errorMsg || null,
-        submittedAt: timestampBoundaryString(command.submittedAt),
-        lastExchangeUpdateAt: timestampBoundaryString(command.lastExchangeUpdateAt),
-        timestamp: timestampBoundaryString(latest?.timestamp || command.updatedAt || command.createdAt),
-        createdAt: timestampBoundaryString(command.createdAt),
-        updatedAt: timestampBoundaryString(command.updatedAt),
-    };
 }
 
 async function createOrderLifecycleEvent({ order, status, timestamp = new Date() }) {
@@ -239,15 +185,7 @@ app.get("/positions", requireAuth, async (req, res) => {
             return res.json({ ok: true, items: [], nextCursor: null, totalEntries, totalPages });
         }
 
-        const items = rows.map((p) => ({
-            id: p.id,
-            symbol: p.symbol,
-            quantity: decimalBoundaryString(p.quantity),
-            avgPrice: decimalBoundaryString(p.avgPrice),
-            realizedPnl: decimalBoundaryString(p.realizedPnl),
-            updatedAt: p.updatedAt?.toISOString?.() || p.updatedAt,
-            createdAt: p.createdAt?.toISOString?.() || p.createdAt,
-        }));
+        const items = rows.map(formatPositionDto);
 
         const nextCursor = rows.length === limit ? (rows[rows.length - 1]?.id || null) : null;
         return res.json({ ok: true, items, nextCursor, totalEntries, totalPages });
@@ -315,18 +253,7 @@ app.get("/orders", requireAuth, async (req, res) => {
 
         const items = commands.map((c) => {
             const latest = latestByOrderId.get(c.orderId);
-            return {
-                orderId: c.orderId,
-                symbol: c.symbol,
-                side: c.side,
-                orderType: c.type,
-                quantity: decimalBoundaryString(c.quantity),
-                status: latest?.status || c.status,
-                price: decimalBoundaryString(latest?.price),
-                timestamp: (latest?.timestamp || c.createdAt)?.toISOString?.() || latest?.timestamp || c.createdAt,
-                createdAt: c.createdAt?.toISOString?.() || c.createdAt,
-                // Include rejection info if your schema has it later (e.g. rejectReason)
-            };
+            return formatOrderCommandDto(c, latest);
         });
 
         const nextCursor = commands.length === limit ? (commands[commands.length - 1]?.orderId || null) : null;
@@ -373,7 +300,7 @@ app.get("/orders/open", requireAuth, async (req, res) => {
         });
         const latestByOrderId = latestEventsByOrderId(events);
 
-        const items = commands.map((command) => formatOrderCommand(command, latestByOrderId.get(command.orderId)));
+        const items = commands.map((command) => formatOrderCommandDto(command, latestByOrderId.get(command.orderId)));
         return res.json({ ok: true, items, count: items.length, symbol: symbol || null });
     } catch (e) {
         console.error("[backend] /orders/open error:", safeErrorMessage(e));
@@ -405,8 +332,8 @@ app.get("/orders/:orderId", requireAuth, async (req, res) => {
 
         return res.json({
             ok: true,
-            order: formatOrderCommand(command, events[0] || null),
-            events: events.map(formatOrderEvent),
+            order: formatOrderCommandDto(command, events[0] || null),
+            events: events.map(formatOrderEventDto),
         });
     } catch (e) {
         console.error("[backend] /orders/:orderId error:", safeErrorMessage(e));
@@ -508,7 +435,7 @@ app.delete("/orders/:orderId", requireAuth, async (req, res) => {
             return res.status(404).json({ ok: false, error: "Order not found" });
         }
 
-        if (CANCEL_IN_FLIGHT_STATUSES.has(String(existing.status || "").toUpperCase())) {
+        if (CANCEL_IN_FLIGHT_STATUSES.includes(String(existing.status || "").toUpperCase())) {
             return res.status(202).json({
                 ok: true,
                 orderId,

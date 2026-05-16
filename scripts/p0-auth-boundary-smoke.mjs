@@ -20,7 +20,8 @@ const executionService = read("apps/execution-service/src/index.js");
 const executionConfig = read("apps/execution-service/src/config.js");
 const readme = read("README.md");
 
-assert.match(frontendTrade, /ACCOUNT_BALANCES_CHANNEL = "events:account:balances"/);
+assert.match(frontendTrade, /ACCOUNT_BALANCES_CHANNEL = DEFAULT_REALTIME_CHANNELS\.balances|ACCOUNT_BALANCES_CHANNEL = "events:account:balances"/);
+assert.match(frontendTrade, /DEFAULT_REALTIME_CHANNELS/);
 assert.doesNotMatch(frontendTrade, /events:account:update/);
 assert.match(frontendTrade, /\/account-info/);
 assert.doesNotMatch(frontendTrade, /userId\s*:/);
