@@ -10,6 +10,7 @@ import {
     CandlestickSeries,
 } from "lightweight-charts";
 import { ADVANCED_ORDER_TYPES, BASIC_ORDER_TYPES, DEFAULT_REALTIME_CHANNELS, TIME_IN_FORCE as TIME_IN_FORCE_OPTIONS } from "@tradeco/api-contracts";
+import { TRADECO_WEB_CLASSES } from "@tradeco/brand-tokens";
 
 import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
 import { CgProfile } from "react-icons/cg";
@@ -36,6 +37,7 @@ const ORDER_TYPE_LABELS = Object.freeze({
 const LIMIT_PRICE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT", "LIMIT_MAKER"]);
 const STOP_PRICE_ORDER_TYPES = new Set(["STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"]);
 const TIME_IN_FORCE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"]);
+const TC = TRADECO_WEB_CLASSES;
 
 export default function TradePage() {
     const router = useRouter();
@@ -1281,12 +1283,13 @@ export default function TradePage() {
                         : "Offline";
     const connectionTone = isRealtimeOpen
         ? replayStatus === "syncing"
-            ? "text-cyan-500"
-            : "text-emerald-500"
+            ? TC.tone.info
+            : TC.tone.success
         : status === "AUTH_ERROR"
-            ? "text-rose-500"
-            : "text-amber-500";
+            ? TC.tone.danger
+            : TC.tone.warning;
     const lastReplayLabel = lastReplayAt ? `Synced ${new Date(lastReplayAt).toLocaleTimeString()}` : "Pending sync";
+    const themeClass = isDark ? TC.theme.dark : TC.theme.light;
 
     const requiresLimitPrice = LIMIT_PRICE_ORDER_TYPES.has(orderType);
     const requiresStopPrice = STOP_PRICE_ORDER_TYPES.has(orderType);
@@ -1298,16 +1301,16 @@ export default function TradePage() {
 
     if (!authReady) {
         return (
-            <main className="min-h-screen w-full flex items-center justify-center bg-[#09090b] text-neutral-200">
-                <div className="text-sm text-neutral-400">Checking session...</div>
+            <main className={`${TC.theme.dark} ${TC.authShell}`}>
+                <div className={`text-sm ${TC.text.muted}`}>Checking session...</div>
             </main>
         );
     }
 
     return (
-        <main className={`min-h-screen w-full overflow-x-hidden transition-colors duration-200 ${isDark ? "bg-[#09090b] text-neutral-200" : "bg-[#f5f5f5] text-neutral-900"}`}>
+        <main className={`${themeClass} ${TC.shell} transition-colors duration-200`}>
             {/* Topbar - Glassmorphism style */}
-            <div className={`sticky top-0 z-40 border-b backdrop-blur-md ${isDark ? "bg-[#09090b]/80 border-white/10" : "bg-white/80 border-black/5"}`}>
+            <div className={`sticky top-0 z-40 border-b backdrop-blur-md ${TC.topbar}`}>
                 <div className="max-w-[1920px] mx-auto px-4 h-16 flex items-center justify-between">
                     <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2 font-bold tracking-tighter text-lg">
@@ -1318,7 +1321,7 @@ export default function TradePage() {
                     <div className="flex items-center gap-3">
                         {/* Live Indicator with Glow */}
                         <div
-                            className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${isDark ? "bg-neutral-900/50 border-white/5" : "bg-white border-black/5"} ${connectionTone}`}
+                            className={`hidden md:flex items-center gap-2 px-3 py-1.5 text-xs font-medium ${TC.statusPill} ${connectionTone}`}
                             title={`${lastReplayLabel}${reconnectCount ? ` • reconnects ${reconnectCount}` : ""}`}
                         >
                             <span className="relative flex h-2 w-2">
@@ -1328,26 +1331,20 @@ export default function TradePage() {
                             {connectionLabel}
                         </div>
 
-                        <div className="flex items-center  dark:bg-neutral-900 bg-neutral-100 rounded-full dark:border-white/5">
+                        <div className={`flex items-center ${TC.segment} rounded-full`}>
                             <button
                                 onClick={toggleTheme}
-                                className={`px-3 py-3 text-xs font-medium rounded-full transition-all ${isDark ? "bg-neutral-800 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-900 bg-white"}`}
+                                className={`px-3 py-3 text-xs font-medium rounded-full transition-all ${TC.segmentActive}`}
                             >
                                 {isDark ? <MdDarkMode /> : <MdOutlineLightMode />}
                             </button>
                         </div>
 
-                        {/* <button className={`h-9 w-9 flex items-center justify-center rounded-full border transition-colors ${isDark ? "bg-neutral-900 border-white/10 hover:bg-neutral-800 text-neutral-400" : "bg-white border-black/5 hover:bg-neutral-50 text-neutral-600"}`}>
-                            <CgProfile />
-                        </button> */}
                         {/* Profile Dropdown Container */}
                         <div className="relative">
                             <button
                                 onClick={() => setIsProfileOpen(!isProfileOpen)}
-                                className={`h-9 w-9 flex items-center justify-center rounded-full border transition-all duration-200 ${isProfileOpen
-                                    ? (isDark ? "bg-neutral-800 border-white/20 text-white" : "bg-neutral-100 border-black/10 text-black")
-                                    : (isDark ? "bg-neutral-900 border-white/10 hover:bg-neutral-800 text-neutral-400" : "bg-white border-black/5 hover:bg-neutral-50 text-neutral-600")
-                                    }`}
+                                className={`h-9 w-9 flex items-center justify-center transition-all duration-200 ${isProfileOpen ? TC.iconButtonActive : TC.iconButton}`}
                             >
                                 <CgProfile className="text-lg" />
                             </button>
@@ -1355,14 +1352,11 @@ export default function TradePage() {
                             {/* Dropdown Menu */}
                             {isProfileOpen && (
                                 <div
-                                    className={`absolute right-0 mt-2 w-56 rounded-xl border shadow-xl backdrop-blur-sm z-50 transform origin-top-right transition-all ${isDark
-                                        ? "bg-[#111]/95 border-white/10 text-neutral-200 shadow-black/50"
-                                        : "bg-white/95 border-black/5 text-neutral-700 shadow-neutral-200/50"
-                                        }`}
+                                    className={`absolute right-0 mt-2 w-56 backdrop-blur-sm z-50 transform origin-top-right transition-all ${TC.dropdown}`}
                                 >
                                     <div className="p-1.5 space-y-0.5">
                                         {/* Header / User Info (Optional) */}
-                                        <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${isDark ? "text-neutral-500" : "text-neutral-400"}`}>
+                                        <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${TC.text.muted}`}>
                                             {authUser?.email || "My Account"}
                                         </div>
 
@@ -1383,7 +1377,7 @@ export default function TradePage() {
 
                                         {/* Logout */}
                                         <button
-                                            className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg text-rose-500 hover:bg-rose-500/10 transition-colors"
+                                            className={`w-full flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg hover:bg-rose-500/10 transition-colors ${TC.tone.danger}`}
                                             onClick={() => {
                                                 router.push("/logout");
                                             }}
@@ -1419,23 +1413,23 @@ export default function TradePage() {
                     <div className="space-y-6">
 
                         {/* Order Box */}
-                        <div className={`rounded-xl border overflow-hidden shadow-sm ${isDark ? "bg-[#111] border-white/10" : "bg-white border-black/5"}`}>
+                        <div className={`overflow-hidden ${TC.panel}`}>
                             <div className="p-5">
                                 {/* Buy/Sell Segmented Control */}
-                                <div className={`grid grid-cols-2 gap-1 p-1 rounded-lg mb-6 ${isDark ? "bg-neutral-900" : "bg-neutral-100"}`}>
+                                <div className={`grid grid-cols-2 gap-1 p-1 mb-6 ${TC.segment}`}>
                                     <button
                                         onClick={() => setSide("BUY")}
                                         className={`py-2 text-sm font-semibold rounded-md transition-all ${side === "BUY"
-                                            ? (isDark ? "bg-[#111] text-emerald-400 shadow-sm ring-1 ring-white/10" : "bg-white text-emerald-600 shadow-sm")
-                                            : "text-neutral-500 hover:text-neutral-400"}`}
+                                            ? `${TC.segmentActive} ${TC.side.buyActive}`
+                                            : TC.segmentInactive}`}
                                     >
                                         BUY
                                     </button>
                                     <button
                                         onClick={() => setSide("SELL")}
                                         className={`py-2 text-sm font-semibold rounded-md transition-all ${side === "SELL"
-                                            ? (isDark ? "bg-[#111] text-rose-400 shadow-sm ring-1 ring-white/10" : "bg-white text-rose-600 shadow-sm")
-                                            : "text-neutral-500 hover:text-neutral-400"}`}
+                                            ? `${TC.segmentActive} ${TC.side.sellActive}`
+                                            : TC.segmentInactive}`}
                                     >
                                         SELL
                                     </button>
@@ -1455,8 +1449,8 @@ export default function TradePage() {
                                                     if (!TIME_IN_FORCE_ORDER_TYPES.has(t)) setTimeInForce("GTC");
                                                 }}
                                                 className={`text-xs font-medium pb-2 -mb-2.5 border-b-2 transition-colors whitespace-nowrap ${isActive
-                                                    ? (isDark ? "text-white border-white" : "text-black border-black")
-                                                    : "text-neutral-500 border-transparent hover:text-neutral-300"}`}
+                                                    ? TC.tab.active
+                                                    : TC.tab.inactive}`}
                                             >
                                                 {ORDER_TYPE_LABELS[t] || t}
                                             </button>
@@ -1471,7 +1465,7 @@ export default function TradePage() {
                                             <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
                                                 <span>Size by</span>
                                             </div>
-                                            <div className={`grid grid-cols-2 gap-1 p-1 rounded-lg ${isDark ? "bg-neutral-900" : "bg-neutral-100"}`}>
+                                            <div className={`grid grid-cols-2 gap-1 p-1 ${TC.segment}`}>
                                                 {[
                                                     ["BASE", selectedSymbol.replace("USDT", "")],
                                                     ["QUOTE", "USDT"],
@@ -1484,8 +1478,8 @@ export default function TradePage() {
                                                             setFormErrors((prev) => ({ ...prev, qty: undefined, quoteOrderQty: undefined, notional: undefined }));
                                                         }}
                                                         className={`py-2 text-xs font-semibold rounded-md transition-all ${orderSizingMode === mode
-                                                            ? (isDark ? "bg-[#111] text-white ring-1 ring-white/10" : "bg-white text-black shadow-sm")
-                                                            : "text-neutral-500 hover:text-neutral-400"}`}
+                                                            ? TC.segmentActive
+                                                            : TC.segmentInactive}`}
                                                     >
                                                         {label}
                                                     </button>
@@ -1499,7 +1493,7 @@ export default function TradePage() {
                                             <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
                                                 <span>Limit price</span>
                                             </div>
-                                            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${isDark ? "bg-[#09090b] border-white/10 focus-within:border-white/30" : "bg-neutral-50 border-neutral-200 focus-within:border-neutral-400"}`}>
+                                            <div className={`flex items-center px-3 py-2.5 transition-all ${TC.input}`}>
                                                 <input
                                                     className="bg-transparent text-sm w-full outline-none font-mono"
                                                     placeholder="Enter limit price"
@@ -1512,7 +1506,7 @@ export default function TradePage() {
                                                 <span className="text-xs text-neutral-500 font-medium">USDT</span>
                                             </div>
                                             {formErrors.limitPrice && (
-                                                <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.limitPrice}</div>
+                                                <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.limitPrice}</div>
                                             )}
                                         </div>
                                     )}
@@ -1522,7 +1516,7 @@ export default function TradePage() {
                                             <div className="flex justify-between text-xs mb-1.5 text-neutral-500">
                                                 <span>Stop price</span>
                                             </div>
-                                            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${isDark ? "bg-[#09090b] border-white/10 focus-within:border-white/30" : "bg-neutral-50 border-neutral-200 focus-within:border-neutral-400"}`}>
+                                            <div className={`flex items-center px-3 py-2.5 transition-all ${TC.input}`}>
                                                 <input
                                                     className="bg-transparent text-sm w-full outline-none font-mono"
                                                     placeholder="Enter stop trigger"
@@ -1535,20 +1529,20 @@ export default function TradePage() {
                                                 <span className="text-xs text-neutral-500 font-medium">USDT</span>
                                             </div>
                                             {formErrors.stopPrice && (
-                                                <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.stopPrice}</div>
+                                                <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.stopPrice}</div>
                                             )}
                                         </div>
                                     )}
 
                                     {orderType === "MARKET" && <div className="text-xs text-neutral-500">Executes at best available Testnet price.</div>}
                                     {formErrors.notional && (
-                                        <div className="text-xs text-rose-500 font-medium">{formErrors.notional}</div>
+                                        <div className={`text-xs font-medium ${TC.tone.danger}`}>{formErrors.notional}</div>
                                     )}
 
                                     {requiresTimeInForce && (
                                         <div>
                                             <div className="text-xs mb-1.5 text-neutral-500">Time in force</div>
-                                            <div className={`grid grid-cols-3 gap-1 p-1 rounded-lg ${isDark ? "bg-neutral-900" : "bg-neutral-100"}`}>
+                                            <div className={`grid grid-cols-3 gap-1 p-1 ${TC.segment}`}>
                                                 {TIME_IN_FORCE_OPTIONS.map((option) => (
                                                     <button
                                                         key={option}
@@ -1558,21 +1552,21 @@ export default function TradePage() {
                                                             setFormErrors((prev) => ({ ...prev, timeInForce: undefined }));
                                                         }}
                                                         className={`py-2 text-xs font-semibold rounded-md transition-all ${timeInForce === option
-                                                            ? (isDark ? "bg-[#111] text-white ring-1 ring-white/10" : "bg-white text-black shadow-sm")
-                                                            : "text-neutral-500 hover:text-neutral-400"}`}
+                                                            ? TC.segmentActive
+                                                            : TC.segmentInactive}`}
                                                     >
                                                         {option}
                                                     </button>
                                                 ))}
                                             </div>
-                                            {formErrors.timeInForce && <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.timeInForce}</div>}
+                                            {formErrors.timeInForce && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.timeInForce}</div>}
                                         </div>
                                     )}
 
                                     <div className="grid grid-cols-2 gap-4">
                                         <div>
                                             <div className="text-xs mb-1.5 text-neutral-500">{usesQuoteSizing ? "Quote amount" : "Quantity"}</div>
-                                            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${isDark ? "bg-[#09090b] border-white/10 focus-within:border-white/30" : "bg-neutral-50 border-neutral-200 focus-within:border-neutral-400"}`}>
+                                            <div className={`flex items-center px-3 py-2.5 transition-all ${TC.input}`}>
                                                 <input
                                                     className="bg-transparent text-sm w-full outline-none font-mono"
                                                     value={usesQuoteSizing ? quoteOrderQty : qty}
@@ -1589,12 +1583,12 @@ export default function TradePage() {
                                                 />
                                                 <span className="text-xs text-neutral-500 font-medium">{usesQuoteSizing ? "USDT" : selectedSymbol.replace("USDT", "")}</span>
                                             </div>
-                                            {formErrors.qty && <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.qty}</div>}
-                                            {formErrors.quoteOrderQty && <div className="mt-1.5 text-xs text-rose-500 font-medium">{formErrors.quoteOrderQty}</div>}
+                                            {formErrors.qty && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.qty}</div>}
+                                            {formErrors.quoteOrderQty && <div className={`mt-1.5 text-xs font-medium ${TC.tone.danger}`}>{formErrors.quoteOrderQty}</div>}
                                         </div>
                                         <div>
                                             <div className="text-xs mb-1.5 text-neutral-500">Total</div>
-                                            <div className={`flex items-center px-3 py-2.5 rounded-lg border ${isDark ? "bg-[#1a1a1a] border-white/5 text-neutral-500" : "bg-neutral-100 border-neutral-200 text-neutral-400"}`}>
+                                            <div className={`flex items-center px-3 py-2.5 ${TC.readonlyInput}`}>
                                                 <input
                                                     className="bg-transparent text-sm w-full outline-none font-mono cursor-default"
                                                     placeholder="0.00"
@@ -1613,16 +1607,13 @@ export default function TradePage() {
                                     </div>
 
                                     {symbolInfoStatus === "error" && (
-                                        <div className="text-xs text-rose-500 bg-rose-500/10 p-2 rounded">{symbolInfoError}</div>
+                                        <div className={`text-xs bg-rose-500/10 p-2 rounded ${TC.tone.danger}`}>{symbolInfoError}</div>
                                     )}
 
                                     <button
                                         onClick={placeOrder}
                                         disabled={isPlacingOrder}
-                                        className={`w-full py-3.5 text-sm font-bold rounded-lg transition-all transform active:scale-[0.98] ${isDark
-                                            ? "bg-white text-black hover:bg-neutral-200 disabled:bg-neutral-800 disabled:text-neutral-500"
-                                            : "bg-black text-white hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-400"
-                                            } ${isPlacingOrder ? "cursor-not-allowed opacity-80" : ""}`}
+                                        className={`w-full py-3.5 text-sm font-bold rounded-lg transition-all transform active:scale-[0.98] ${TC.submitButton} ${isPlacingOrder ? "cursor-not-allowed opacity-80" : ""}`}
                                     >
                                         {isPlacingOrder ? "Submitting..." : (
                                             <>
@@ -1635,7 +1626,7 @@ export default function TradePage() {
                         </div>
 
                         {/* Account Summary */}
-                        <div className={`rounded-xl border shadow-sm p-5 ${isDark ? "bg-[#111] border-white/10" : "bg-white border-black/5"}`}>
+                        <div className={`p-5 ${TC.panel}`}>
                             <div className="flex items-center justify-between mb-4">
                                 <h3 className="text-sm font-semibold tracking-tight">Assets</h3>
                                 <button
@@ -1648,7 +1639,7 @@ export default function TradePage() {
                                 </button>
                             </div>
 
-                            {balancesError && <div className="text-xs text-rose-500 mb-3">{balancesError}</div>}
+                            {balancesError && <div className={`text-xs mb-3 ${TC.tone.danger}`}>{balancesError}</div>}
 
                             <div className="space-y-3 text-sm">
                                 {(() => {
@@ -1662,7 +1653,7 @@ export default function TradePage() {
                                         <>
                                             <div className="flex items-center justify-between py-1">
                                                 <div className="flex items-center gap-2">
-                                                    <div className="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center text-[10px] text-emerald-500 font-bold">$</div>
+                                                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${TC.side.buyBadge}`}>$</div>
                                                     <span className="font-medium">USDT</span>
                                                 </div>
                                                 <div className="text-right">
@@ -1685,7 +1676,7 @@ export default function TradePage() {
                                                             <div key={asset} className="flex items-center justify-between">
                                                                 <button
                                                                     onClick={() => setSelectedSymbol(sym)}
-                                                                    className="text-xs font-medium hover:text-emerald-500 transition-colors"
+                                                                    className={`text-xs font-medium transition-colors ${TC.symbolLink}`}
                                                                 >
                                                                     {asset}
                                                                 </button>
@@ -1711,7 +1702,7 @@ export default function TradePage() {
                     {/* Right Column: Chart & Data - Added min-w-0 for grid safety */}
                     <div className="space-y-6 flex flex-col h-full min-h-0 w-full min-w-0">
                         {/* Chart Section */}
-                        <div className={`rounded-xl border shadow-sm flex flex-col ${isDark ? "bg-[#111] border-white/10" : "bg-white border-black/5"}`}>
+                        <div className={`flex flex-col ${TC.panel}`}>
                             <div className="flex flex-wrap items-center justify-between p-4 border-b border-neutral-100 dark:border-white/5 gap-x-4 gap-y-4">
                                 <div className="flex items-center gap-4">
                                     <h2 className="text-lg font-bold tracking-tight">{selectedSymbol.replace("USDT", "")}<span className="text-neutral-500 text-sm font-normal">/USDT</span></h2>
@@ -1721,14 +1712,14 @@ export default function TradePage() {
                                     </div>
                                 </div>
 
-                                <div className={`flex rounded-lg overflow-hidden border ${isDark ? "border-white/10 bg-neutral-900" : "border-neutral-200 bg-neutral-50"}`}>
+                                <div className={`flex rounded-lg overflow-hidden border ${TC.segment}`}>
                                     {["1m", "5m", "1d", "1w"].map((t) => (
                                         <button
                                             key={t}
                                             onClick={() => setChartInterval(t)}
                                             className={`px-3 py-1.5 text-xs font-medium transition-colors ${t === chartInterval
-                                                ? (isDark ? "bg-neutral-800 text-white" : "bg-white text-black shadow-sm")
-                                                : "text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-300"}`}
+                                                ? TC.segmentActive
+                                                : TC.segmentInactive}`}
                                         >
                                             {t}
                                         </button>
@@ -1742,7 +1733,7 @@ export default function TradePage() {
                         </div>
 
                         {/* Tabs & Table Section */}
-                        <div className={`flex-1 rounded-xl border shadow-sm flex flex-col min-h-[500px] ${isDark ? "bg-[#111] border-white/10" : "bg-white border-black/5"}`}>
+                        <div className={`flex-1 flex flex-col min-h-[500px] ${TC.panel}`}>
                             {/* Header: Flex col on mobile, row on desktop to prevent squashing */}
                             <div className="flex flex-col md:flex-row md:items-center justify-between px-4 pt-4 pb-2 border-b border-neutral-100 dark:border-white/5 gap-4">
                                 {/* Tabs Container: Added overflow-x-auto to handle many tabs on small screen */}
@@ -1761,8 +1752,8 @@ export default function TradePage() {
                                                 if (t.id === "positions") { setPositionsError(""); setPositionsCursor(null); setPositionsNextCursor(null); setPositionsPrevStack([]); setPositionsTotalEntries(0); setPositionsTotalPages(1); }
                                             }}
                                             className={`text-sm font-medium pb-3 border-b-2 transition-colors whitespace-nowrap ${activeTab === t.id
-                                                ? (isDark ? "text-white border-emerald-500" : "text-black border-emerald-600")
-                                                : "text-neutral-500 border-transparent hover:text-neutral-400"}`}
+                                                ? TC.tab.activeAccent
+                                                : TC.tab.inactive}`}
                                         >
                                             {t.label}
                                         </button>
@@ -1770,7 +1761,7 @@ export default function TradePage() {
                                 </div>
 
                                 {activeTab === "trades" && (
-                                    <div className={`flex items-center px-2 py-1.5 rounded-md border w-full md:w-auto ${isDark ? "bg-neutral-900 border-white/10" : "bg-neutral-50 border-neutral-200"}`}>
+                                    <div className={`flex items-center px-2 py-1.5 w-full md:w-auto ${TC.input}`}>
                                         <svg className="w-3 h-3 text-neutral-500 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                                         <input
                                             className="bg-transparent text-xs outline-none w-full md:w-32"
@@ -1785,7 +1776,7 @@ export default function TradePage() {
                             <div className="flex-1 overflow-hidden relative">
                                 <div className="absolute inset-0 overflow-auto custom-scrollbar">
                                     <table className="w-full text-sm text-left">
-                                        <thead className={`sticky top-0 z-10 text-xs uppercase tracking-wider ${isDark ? "bg-[#151515] text-neutral-500" : "bg-neutral-50 text-neutral-500"}`}>
+                                        <thead className={`sticky top-0 z-10 text-xs uppercase tracking-wider ${TC.tableHeader}`}>
                                             <tr>
                                                 {activeTab === "positions" && ["Symbol", "Size", "Entry", "Mark", "Realized PnL", "Unrealized PnL"].map(h => <th key={h} className="px-5 py-3 font-medium whitespace-nowrap">{h}</th>)}
                                                 {activeTab === "orders" && ["ID", "Symbol", "Side", "Type", "Qty", "Status"].map(h => <th key={h} className="px-5 py-3 font-medium whitespace-nowrap">{h}</th>)}
@@ -1796,7 +1787,7 @@ export default function TradePage() {
                                             {/* POSITIONS RENDER LOGIC */}
                                             {activeTab === "positions" && (
                                                 positionsLoading ? <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">Loading positions...</td></tr> :
-                                                    positionsError ? <tr><td colSpan={6} className="px-5 py-8 text-center text-rose-500">{positionsError}</td></tr> :
+                                                    positionsError ? <tr><td colSpan={6} className={`px-5 py-8 text-center ${TC.tone.danger}`}>{positionsError}</td></tr> :
                                                         positionsPage.length === 0 ? <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">No open positions</td></tr> :
                                                             positionsPage.map(p => {
                                                                 const sym = String(p.symbol || "").toUpperCase();
@@ -1808,12 +1799,12 @@ export default function TradePage() {
 
                                                                 return (
                                                                     <tr key={p.id || sym} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
-                                                                        <td className="px-5 py-3 font-medium cursor-pointer hover:text-emerald-500" onClick={() => setSelectedSymbol(sym)}>{sym}</td>
+                                                                        <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => setSelectedSymbol(sym)}>{sym}</td>
                                                                         <td className="px-5 py-3 font-mono text-neutral-500">{trimZeros(qtyNum.toFixed(6))}</td>
                                                                         <td className="px-5 py-3 font-mono">{trimZeros(entry.toFixed(6))}</td>
                                                                         <td className="px-5 py-3 font-mono">{formatPrice(mark)}</td>
-                                                                        <td className={`px-5 py-3 font-mono ${realized >= 0 ? "text-emerald-500" : "text-rose-500"}`}>{realized > 0 && "+"}{trimZeros(realized.toFixed(4))}</td>
-                                                                        <td className={`px-5 py-3 font-mono ${unrealized >= 0 ? "text-emerald-500" : "text-rose-500"}`}>{unrealized > 0 && "+"}{trimZeros(unrealized.toFixed(4))}</td>
+                                                                        <td className={`px-5 py-3 font-mono ${realized >= 0 ? TC.tone.success : TC.tone.danger}`}>{realized > 0 && "+"}{trimZeros(realized.toFixed(4))}</td>
+                                                                        <td className={`px-5 py-3 font-mono ${unrealized >= 0 ? TC.tone.success : TC.tone.danger}`}>{unrealized > 0 && "+"}{trimZeros(unrealized.toFixed(4))}</td>
                                                                     </tr>
                                                                 )
                                                             })
@@ -1829,18 +1820,18 @@ export default function TradePage() {
                                                                     {String(o.orderId).slice(0, 8)}...
                                                                     <CopyOrderButton orderId={o.orderId} isDark={isDark} onCopy={copyOrderId} />
                                                                 </td>
-                                                                <td className="px-5 py-3 font-medium cursor-pointer hover:text-emerald-500" onClick={() => setSelectedSymbol(o.symbol)}>{o.symbol}</td>
+                                                                <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => setSelectedSymbol(o.symbol)}>{o.symbol}</td>
                                                                 <td className="px-5 py-3">
-                                                                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${o.side === "BUY" ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"}`}>
+                                                                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${o.side === "BUY" ? TC.side.buyBadge : TC.side.sellBadge}`}>
                                                                         {o.side}
                                                                     </span>
                                                                 </td>
                                                                 <td className="px-5 py-3 text-neutral-500 text-xs">{o.orderType}</td>
                                                                 <td className="px-5 py-3 font-mono">{o.quantity}</td>
                                                                 <td className="px-5 py-3 text-xs font-medium">
-                                                                    <span className={`px-2 py-1 rounded border ${(ordersById[o.orderId]?.status || o.status) === "FILLED" ? "border-emerald-500/20 text-emerald-500 bg-emerald-500/5" :
-                                                                        (ordersById[o.orderId]?.status || o.status) === "CANCELED" ? "border-neutral-500/20 text-neutral-500" :
-                                                                            "border-yellow-500/20 text-yellow-500 bg-yellow-500/5"
+                                                                    <span className={`px-2 py-1 rounded border ${(ordersById[o.orderId]?.status || o.status) === "FILLED" ? TC.status.filled :
+                                                                        (ordersById[o.orderId]?.status || o.status) === "CANCELED" ? TC.status.cancelled :
+                                                                            TC.status.pending
                                                                         }`}>
                                                                         {ordersById[o.orderId]?.status || o.status}
                                                                     </span>
@@ -1859,7 +1850,7 @@ export default function TradePage() {
                                                                     {pinned.has(sym) ? "★" : "☆"}
                                                                 </button>
                                                             </td>
-                                                            <td className="px-5 py-3 font-medium cursor-pointer hover:text-emerald-500" onClick={() => setSelectedSymbol(sym)}>{sym}</td>
+                                                            <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => setSelectedSymbol(sym)}>{sym}</td>
                                                             <td className="px-5 py-3 font-mono">{formatPrice(v.price)}</td>
                                                             <td className="px-5 py-3 text-xs text-neutral-500 tabular-nums">{v.ts ? new Date(v.ts).toLocaleTimeString() : "-"}</td>
                                                         </tr>
@@ -1880,14 +1871,14 @@ export default function TradePage() {
                                     </div>
                                     <div className="flex gap-2">
                                         <button
-                                            className={`p-1.5 rounded-md border disabled:opacity-30 ${isDark ? "border-white/10 hover:bg-neutral-800" : "border-neutral-200 hover:bg-white"}`}
+                                            className={`p-1.5 rounded-md disabled:opacity-30 ${TC.iconButton}`}
                                             onClick={() => activeTab === "positions" ? fetchPositionsPage(positionsCursor) : fetchOrdersPage(ordersCursor)}
                                             disabled={activeTab === "positions" ? positionsLoading : ordersLoading}
                                         >
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                                         </button>
                                         <button
-                                            className={`p-1.5 rounded-md border disabled:opacity-30 ${isDark ? "border-white/10 hover:bg-neutral-800" : "border-neutral-200 hover:bg-white"}`}
+                                            className={`p-1.5 rounded-md disabled:opacity-30 ${TC.iconButton}`}
                                             disabled={(activeTab === "positions" ? positionsPrevStack.length === 0 : ordersPrevStack.length === 0)}
                                             onClick={() => {
                                                 if (activeTab === "positions") {
@@ -1911,7 +1902,7 @@ export default function TradePage() {
                                             Page {activeTab === "positions" ? positionsCurrentPage : ordersCurrentPage}
                                         </span>
                                         <button
-                                            className={`p-1.5 rounded-md border disabled:opacity-30 ${isDark ? "border-white/10 hover:bg-neutral-800" : "border-neutral-200 hover:bg-white"}`}
+                                            className={`p-1.5 rounded-md disabled:opacity-30 ${TC.iconButton}`}
                                             disabled={activeTab === "positions" ? (!positionsNextCursor || positionsIsLastPage) : (!ordersNextCursor || ordersIsLastPage)}
                                             onClick={() => {
                                                 if (activeTab === "positions" && positionsNextCursor) {
@@ -1937,7 +1928,7 @@ export default function TradePage() {
             {toast.open && (
                 <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 sm:p-0">
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onClick={() => !isPlacingOrder && setToast(t => ({ ...t, open: false }))} />
-                    <div className={`relative w-full max-w-sm rounded-2xl border shadow-2xl overflow-hidden transform transition-all ${isDark ? "bg-[#111] border-white/10" : "bg-white border-black/5"}`}>
+                    <div className={`relative w-full max-w-sm overflow-hidden transform transition-all ${TC.panel}`}>
                         <div className={`h-1.5 w-full ${toast.status === "FILLED" ? "bg-emerald-500" : toast.status === "REJECTED" ? "bg-rose-500" : "bg-neutral-500"}`}></div>
                         <div className="p-6">
                             <h3 className="text-lg font-bold tracking-tight mb-1">{toast.title}</h3>
@@ -1946,13 +1937,13 @@ export default function TradePage() {
                             <div className="flex gap-3 mt-6">
                                 <button
                                     onClick={() => { setActiveTab("orders"); setToast(t => ({ ...t, open: false })); }}
-                                    className={`flex-1 py-2.5 text-sm font-medium rounded-lg border ${isDark ? "border-white/10 hover:bg-white/5" : "border-neutral-200 hover:bg-neutral-50"}`}
+                                    className={`flex-1 py-2.5 text-sm font-medium rounded-lg ${TC.secondaryButton}`}
                                 >
                                     View Order
                                 </button>
                                 <button
                                     onClick={() => setToast(t => ({ ...t, open: false }))}
-                                    className={`flex-1 py-2.5 text-sm font-bold rounded-lg ${isDark ? "bg-white text-black hover:bg-neutral-200" : "bg-black text-white hover:bg-neutral-800"}`}
+                                    className={`flex-1 py-2.5 text-sm font-bold rounded-lg ${TC.primaryButton}`}
                                 >
                                     Dismiss
                                 </button>
@@ -1998,7 +1989,7 @@ const CopyOrderButton = ({ orderId, isDark, onCopy }) => {
                 ? "hover:bg-slate-800"
                 : "hover:bg-slate-200"
                 } ${copied
-                    ? "text-emerald-500 scale-110" // Green and slightly larger when copied
+                    ? `${TC.tone.success} scale-110`
                     : isDark ? "text-slate-400" : "text-slate-500"
                 }`}
             title={copied ? "Copied!" : "Copy order id"}

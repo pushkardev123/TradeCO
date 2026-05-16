@@ -1,0 +1,294 @@
+:root,
+.tradeco-theme-light {
+    --tc-surface-canvas: #f5f6f8;
+    --tc-surface-panel: #ffffff;
+    --tc-surface-panel-raised: #ffffff;
+    --tc-surface-muted: #f3f4f6;
+    --tc-surface-input: #fafafa;
+    --tc-text-primary: #18181b;
+    --tc-text-secondary: #3f3f46;
+    --tc-text-muted: #71717a;
+    --tc-text-subtle: #a1a1aa;
+    --tc-text-inverse: #ffffff;
+    --tc-border-subtle: rgba(24, 24, 27, 0.08);
+    --tc-border-muted: rgba(24, 24, 27, 0.06);
+    --tc-border-focus: rgba(8, 145, 178, 0.4);
+    --tc-trading-buy: #059669;
+    --tc-trading-buy-wash: rgba(5, 150, 105, 0.1);
+    --tc-trading-sell: #e11d48;
+    --tc-trading-sell-wash: rgba(225, 29, 72, 0.1);
+    --tc-status-live: #059669;
+    --tc-status-sync: #0891b2;
+    --tc-status-warning: #d97706;
+    --tc-status-error: #e11d48;
+    --tc-status-neutral: #71717a;
+    --tc-font-sans: "Inter", "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    --tc-font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", ui-monospace, monospace;
+    --tc-radius-panel: 8px;
+    --tc-radius-control: 8px;
+    --tc-radius-pill: 999px;
+    --tc-shadow-panel: 0 1px 2px rgba(15, 23, 42, 0.05);
+    --tc-shadow-floating: 0 20px 40px rgba(15, 23, 42, 0.16);
+}
+
+.tradeco-theme-dark {
+    --tc-surface-canvas: #09090b;
+    --tc-surface-panel: #111214;
+    --tc-surface-panel-raised: #15171a;
+    --tc-surface-muted: #181b1f;
+    --tc-surface-input: #08090b;
+    --tc-text-primary: #f4f4f5;
+    --tc-text-secondary: #d4d4d8;
+    --tc-text-muted: #71717a;
+    --tc-text-subtle: #a1a1aa;
+    --tc-text-inverse: #09090b;
+    --tc-border-subtle: rgba(255, 255, 255, 0.1);
+    --tc-border-muted: rgba(255, 255, 255, 0.06);
+    --tc-border-focus: rgba(103, 232, 249, 0.48);
+    --tc-trading-buy: #34d399;
+    --tc-trading-buy-wash: rgba(52, 211, 153, 0.14);
+    --tc-trading-sell: #fb7185;
+    --tc-trading-sell-wash: rgba(251, 113, 133, 0.14);
+    --tc-status-live: #34d399;
+    --tc-status-sync: #22d3ee;
+    --tc-status-warning: #f59e0b;
+    --tc-status-error: #fb7185;
+    --tc-status-neutral: #a1a1aa;
+    --tc-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.24);
+    --tc-shadow-floating: 0 20px 40px rgba(0, 0, 0, 0.45);
+}
+
+.tradeco-shell {
+    min-height: 100vh;
+    width: 100%;
+    overflow-x: hidden;
+    background: var(--tc-surface-canvas);
+    color: var(--tc-text-primary);
+    font-family: var(--tc-font-sans);
+    letter-spacing: 0;
+}
+
+.tradeco-auth-shell {
+    min-height: 100vh;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--tc-surface-canvas);
+    color: var(--tc-text-primary);
+    font-family: var(--tc-font-sans);
+}
+
+.tradeco-topbar {
+    background: color-mix(in srgb, var(--tc-surface-canvas) 86%, transparent);
+    border-color: var(--tc-border-subtle);
+}
+
+@supports not (background: color-mix(in srgb, black 50%, transparent)) {
+    .tradeco-topbar {
+        background: var(--tc-surface-canvas);
+    }
+}
+
+.tradeco-panel {
+    background: var(--tc-surface-panel);
+    border: 1px solid var(--tc-border-subtle);
+    border-radius: var(--tc-radius-panel);
+    box-shadow: var(--tc-shadow-panel);
+}
+
+.tradeco-dropdown {
+    background: color-mix(in srgb, var(--tc-surface-panel) 96%, transparent);
+    border: 1px solid var(--tc-border-subtle);
+    border-radius: var(--tc-radius-panel);
+    color: var(--tc-text-primary);
+    box-shadow: var(--tc-shadow-floating);
+}
+
+.tradeco-segment {
+    background: var(--tc-surface-muted);
+    border: 1px solid var(--tc-border-muted);
+    border-radius: var(--tc-radius-control);
+}
+
+.tradeco-segment-active {
+    background: var(--tc-surface-panel);
+    color: var(--tc-text-primary);
+    box-shadow: var(--tc-shadow-panel);
+    outline: 1px solid var(--tc-border-muted);
+}
+
+.tradeco-segment-inactive {
+    color: var(--tc-text-muted);
+}
+
+.tradeco-segment-inactive:hover {
+    color: var(--tc-text-secondary);
+}
+
+.tradeco-input {
+    background: var(--tc-surface-input);
+    border: 1px solid var(--tc-border-subtle);
+    border-radius: var(--tc-radius-control);
+    color: var(--tc-text-primary);
+}
+
+.tradeco-input:focus-within {
+    border-color: var(--tc-border-focus);
+}
+
+.tradeco-input-readonly {
+    background: var(--tc-surface-muted);
+    border-color: var(--tc-border-muted);
+    color: var(--tc-text-muted);
+}
+
+.tradeco-status-pill,
+.tradeco-icon-button {
+    background: var(--tc-surface-muted);
+    border: 1px solid var(--tc-border-muted);
+    border-radius: var(--tc-radius-pill);
+}
+
+.tradeco-icon-button {
+    color: var(--tc-text-muted);
+}
+
+.tradeco-icon-button:hover,
+.tradeco-icon-button-active {
+    background: var(--tc-surface-panel-raised);
+    border-color: var(--tc-border-subtle);
+    color: var(--tc-text-primary);
+}
+
+.tradeco-table-header {
+    background: var(--tc-surface-panel-raised);
+    color: var(--tc-text-muted);
+}
+
+.tradeco-submit-button,
+.tradeco-primary-button {
+    background: var(--tc-text-primary);
+    color: var(--tc-text-inverse);
+}
+
+.tradeco-submit-button:hover,
+.tradeco-primary-button:hover {
+    background: var(--tc-text-secondary);
+}
+
+.tradeco-submit-button:disabled {
+    background: var(--tc-surface-muted);
+    color: var(--tc-text-muted);
+}
+
+.tradeco-secondary-button {
+    border: 1px solid var(--tc-border-subtle);
+    color: var(--tc-text-primary);
+}
+
+.tradeco-secondary-button:hover {
+    background: var(--tc-surface-muted);
+}
+
+.tradeco-symbol-link {
+    color: var(--tc-text-primary);
+}
+
+.tradeco-symbol-link:hover {
+    color: var(--tc-trading-buy);
+}
+
+.tradeco-text-primary {
+    color: var(--tc-text-primary);
+}
+
+.tradeco-text-secondary {
+    color: var(--tc-text-secondary);
+}
+
+.tradeco-text-muted {
+    color: var(--tc-text-muted);
+}
+
+.tradeco-text-subtle {
+    color: var(--tc-text-subtle);
+}
+
+.tradeco-text-inverse {
+    color: var(--tc-text-inverse);
+}
+
+.tradeco-tone-success {
+    color: var(--tc-status-live);
+}
+
+.tradeco-tone-danger {
+    color: var(--tc-status-error);
+}
+
+.tradeco-tone-warning {
+    color: var(--tc-status-warning);
+}
+
+.tradeco-tone-info {
+    color: var(--tc-status-sync);
+}
+
+.tradeco-tone-neutral {
+    color: var(--tc-status-neutral);
+}
+
+.tradeco-side-buy-active {
+    color: var(--tc-trading-buy);
+}
+
+.tradeco-side-sell-active {
+    color: var(--tc-trading-sell);
+}
+
+.tradeco-side-buy-badge {
+    background: var(--tc-trading-buy-wash);
+    color: var(--tc-trading-buy);
+}
+
+.tradeco-side-sell-badge {
+    background: var(--tc-trading-sell-wash);
+    color: var(--tc-trading-sell);
+}
+
+.tradeco-tab-active {
+    color: var(--tc-text-primary);
+    border-color: var(--tc-text-primary);
+}
+
+.tradeco-tab-active-accent {
+    color: var(--tc-text-primary);
+    border-color: var(--tc-trading-buy);
+}
+
+.tradeco-tab-inactive {
+    color: var(--tc-text-muted);
+    border-color: transparent;
+}
+
+.tradeco-tab-inactive:hover {
+    color: var(--tc-text-secondary);
+}
+
+.tradeco-order-status-filled {
+    background: var(--tc-trading-buy-wash);
+    border-color: color-mix(in srgb, var(--tc-trading-buy) 24%, transparent);
+    color: var(--tc-trading-buy);
+}
+
+.tradeco-order-status-cancelled {
+    border-color: color-mix(in srgb, var(--tc-status-neutral) 24%, transparent);
+    color: var(--tc-status-neutral);
+}
+
+.tradeco-order-status-pending {
+    background: color-mix(in srgb, var(--tc-status-warning) 10%, transparent);
+    border-color: color-mix(in srgb, var(--tc-status-warning) 24%, transparent);
+    color: var(--tc-status-warning);
+}

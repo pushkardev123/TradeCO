@@ -1,0 +1,14 @@
+{
+    "name": "@tradeco/brand-tokens",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.js",
+    "exports": {
+        ".": "./src/index.js",
+        "./theme.css": "./src/tradeco-tokens.css"
+    },
+    "scripts": {
+        "test": "node --test src/*.test.js"
+    }
+}

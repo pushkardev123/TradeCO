@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@tradeco/brand-tokens/theme.css";
 
 :root {
   --background: #ffffff;
@@ -20,7 +21,7 @@
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: "Inter", "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  background: var(--tc-surface-canvas, var(--background));
+  color: var(--tc-text-primary, var(--foreground));
+  font-family: var(--tc-font-sans, "Inter", "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif);
 }
