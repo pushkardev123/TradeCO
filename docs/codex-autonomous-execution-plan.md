@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 05:18 IST
+Last updated: 2026-05-16 09:12 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current pushed commit: `5aaea86` (`Add Binance exchange filter validation`)
+- Current local commit: `f7c5dfe` (`Add deploy env preflight validation`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -33,6 +33,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `5c5314b` | Migrate user data stream to current WebSocket API flow | Binance WebSocket API user stream subscription, signed request helper, reconnect handling, env/deploy docs, and removal of old REST stream-key path. |
 | `cff1027` | Record user stream migration completion | Ledger-only commit after user-stream migration. |
 | `5aaea86` | Implement full Binance filter and risk validation layer | Shared decimal-safe Binance filter validation, backend/execution enforcement before submission, field-level errors, and deploy-path verification. |
+| `f7c5dfe` | Add environment validation and startup config checks; Create runbooks for operations and testnet reset handling | Added deploy env preflight validation, caught/fixed local Postgres role-length startup failure, verified clean Compose recovery, health endpoints, tests, and Redis smokes. |
 
 ## Working Rules
 
@@ -249,3 +250,51 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
   - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
   - `git diff --check`: pass.
+
+### Completed: Add environment validation and startup config checks
+
+- Notion page: `3608ea2b-3f8a-81e5-b869-c31dfb67a901`
+- Status at start: `QA`, `P0`, medium risk.
+- Branch: `main`
+- Completed: 2026-05-16 09:12 IST
+- Commit: `f7c5dfe` (`Add deploy env preflight validation`)
+- Goal: close the remaining startup/env QA by proving the deploy stack fails clearly and starts reliably with valid env.
+- Finding:
+  - Local Compose startup initially failed because the existing Postgres volume was initialized with older credentials.
+  - After resetting the local Compose volumes, Postgres still failed because the generated `TRADECO_POSTGRES_USER` exceeded PostgreSQL's 63-byte role-name limit.
+- Implementation:
+  - Added `scripts/validate-deploy-env.mjs`.
+  - Added `npm run deploy:compose:check-env`.
+  - Wired the preflight before `deploy:compose:config` and `deploy:compose:up`.
+  - Validates required deploy secrets, `ENCRYPTION_KEY` length, Postgres identifier lengths, bundled Postgres `DATABASE_URL` consistency, Redis URL shape, frontend/public URL shape, and Binance Testnet-only endpoints.
+  - Updated `.env.deploy.example` and `docs/deployment.md` with bundled Postgres and role-name guidance.
+  - Repaired local `.env.deploy` username without printing secrets.
+- Verification:
+  - `npm run deploy:compose:check-env`: failed before local env repair with the expected Postgres role-length error.
+  - `npm run deploy:compose:check-env`: pass after local env repair.
+  - `npm run deploy:compose:up`: pass after clean local Compose volume reset.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `npm run smoke:p0-auth-boundary`: pass.
+  - `npm run smoke:p2-redis-stream`: pass outside sandbox against local Redis.
+  - `npm run smoke:p2-market-order`: pass outside sandbox against local Redis.
+  - `npm run test:stream-contracts`: pass.
+  - `npm --workspace apps/backend run test`: pass.
+  - `npm --workspace apps/execution-service run test`: pass.
+  - `npm --workspace apps/event-service run test`: pass.
+  - `npm --workspace apps/frontend run lint`: pass with existing hook dependency warnings only.
+  - `git diff --check`: pass.
+
+### Completed: Create runbooks for operations and testnet reset handling
+
+- Notion page: `3608ea2b-3f8a-81ff-8e58-dbde4c5b164a`
+- Status at start: `In review`, `P2`, low risk.
+- Branch: `main`
+- Completed: 2026-05-16 09:12 IST
+- Commit: `f7c5dfe` (`Add deploy env preflight validation`)
+- Goal: validate the runbooks against a real local stack recovery/reset flow.
+- Result:
+  - Exercised local Compose recovery after database credential/initialization failure.
+  - Verified that the documented local stack reset path works.
+  - Added deploy preflight validation so future operators get a clear env error before Docker initializes broken local state.
+- Verification:
+  - Same clean Compose startup, health checks, service tests, and Redis smokes listed in the environment validation task above.
