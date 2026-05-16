@@ -1,6 +1,6 @@
 # Codex Autonomous Execution Plan
 
-Last updated: 2026-05-16 10:10 IST
+Last updated: 2026-05-16 10:19 IST
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 
 - Branch: `main`
 - Remote: `origin/main`
-- Current local commit: `0c47b03` (`Add tokenized brand system`)
+- Current local commit: `8ebb957` (`Rebuild trading terminal layout`)
 - Docker Compose stack: verified running with frontend, backend, event service, execution service, Postgres, Redis, and migration container.
 - Local deploy command: `npm run deploy:compose:up`
 - Local app URLs:
@@ -38,6 +38,7 @@ The Notion Master Execution Tracker remains the planning source of truth. This f
 | `c96679b` | Add reconnect and replay behavior | Frontend now refreshes backend snapshots, resubscribes chart state, tracks reconnect attempts, and exposes realtime replay state after websocket reconnect or tab/mobile resume. |
 | `a7ad07d` | Add advanced single order types | Added quote-sized market orders, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, and LIMIT_MAKER support through shared contracts, backend validation/persistence, execution request building, frontend controls, and Prisma migration. |
 | `0c47b03` | Create tokenized brand system | Added shared brand token package with mobile-reusable semantic tokens, CSS variables/component classes, frontend wiring for core terminal primitives, Docker workspace integration, and focused token tests. |
+| `8ebb957` | Rebuild trading terminal layout | Reworked the terminal around tokenized panel components, mobile section navigation, a tighter desktop grid/sticky control rail, and split table row components for positions, orders, and market board. |
 
 ## Working Rules
 
@@ -404,6 +405,29 @@ This sequence will be reconciled against Notion before each item starts.
   - `npm --workspace apps/frontend run lint`: pass with existing hook dependency warnings only.
   - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
   - `npm run deploy:compose:check-env`: pass.
+  - `npm run deploy:compose:up`: pass and rebuilt all app images.
+  - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
+  - `git diff --check`: pass.
+- Verification limitation:
+  - Browser automation tools were not available in this session, so visual verification was limited to production build, Dockerized `/trade` HTTP 200, and code inspection.
+
+### Completed: Rebuild trading terminal layout
+
+- Notion page: `3608ea2b-3f8a-8172-89d9-f97c7f540953`
+- Status at start: `Not started`, `P1`, medium risk.
+- Branch: `main`
+- Completed: 2026-05-16 10:19 IST
+- Commit: `8ebb957` (`Rebuild trading terminal layout`)
+- Goal: move the dense single page toward a structured terminal layout with reusable panels and more usable mobile navigation while preserving existing API/realtime flows.
+- Implementation:
+  - Added mobile section navigation for Trade, Assets, Chart, and Activity sections.
+  - Reworked the main workspace to a tighter responsive grid with a sticky desktop control rail and stacked mobile sections.
+  - Added reusable terminal panel wrappers for order ticket, balances, chart, and activity panels.
+  - Split positions, orders, and market board table bodies into focused components without changing data fetching or mutation behavior.
+  - Kept the existing order workflow, chart subscription, auth handling, and realtime state paths intact.
+- Verification:
+  - `npm --workspace apps/frontend run lint`: pass with existing hook dependency warnings only.
+  - `set -a; source .env.deploy; set +a; npm --workspace apps/frontend run build`: pass outside sandbox.
   - `npm run deploy:compose:up`: pass and rebuilt all app images.
   - Health checks: backend `200`, event-service `200`, frontend `/trade` `200`.
   - `git diff --check`: pass.
