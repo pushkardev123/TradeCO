@@ -38,6 +38,12 @@ const LIMIT_PRICE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFI
 const STOP_PRICE_ORDER_TYPES = new Set(["STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"]);
 const TIME_IN_FORCE_ORDER_TYPES = new Set(["LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"]);
 const TC = TRADECO_WEB_CLASSES;
+const MOBILE_TERMINAL_SECTIONS = Object.freeze([
+    ["#order-ticket", "Trade"],
+    ["#account-balances", "Assets"],
+    ["#price-chart", "Chart"],
+    ["#terminal-activity", "Activity"],
+]);
 
 export default function TradePage() {
     const router = useRouter();
@@ -1405,15 +1411,27 @@ export default function TradePage() {
                 </div>
             </div>
 
-            <div className="max-w-[1920px] mx-auto p-4 lg:p-6">
-                <h1 className="text-xl font-medium tracking-tight mb-6 px-1">Portfolio & Trade</h1>
+            <div className="max-w-[1920px] mx-auto px-3 py-4 sm:px-4 lg:px-6 lg:py-5">
+                <div className="mb-4 flex flex-col gap-2 px-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                        <h1 className="text-xl font-semibold tracking-tight">Portfolio & Trade</h1>
+                        <div className={`mt-1 text-xs ${TC.text.muted}`}>
+                            {selectedSymbol.replace("USDT", "")}/USDT · {formatPrice(currentPrice)}
+                        </div>
+                    </div>
+                    <div className={`text-xs ${TC.text.muted}`}>
+                        {lastReplayLabel}
+                    </div>
+                </div>
 
-                <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
+                <MobileTerminalNav />
+
+                <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] 2xl:grid-cols-[380px_minmax(0,1fr)]">
                     {/* Left Column: Controls */}
-                    <div className="space-y-6">
+                    <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
 
                         {/* Order Box */}
-                        <div className={`overflow-hidden ${TC.panel}`}>
+                        <OrderTicketPanel>
                             <div className="p-5">
                                 {/* Buy/Sell Segmented Control */}
                                 <div className={`grid grid-cols-2 gap-1 p-1 mb-6 ${TC.segment}`}>
@@ -1623,10 +1641,10 @@ export default function TradePage() {
                                     </button>
                                 </div>
                             </div>
-                        </div>
+                        </OrderTicketPanel>
 
                         {/* Account Summary */}
-                        <div className={`p-5 ${TC.panel}`}>
+                        <BalancesPanel>
                             <div className="flex items-center justify-between mb-4">
                                 <h3 className="text-sm font-semibold tracking-tight">Assets</h3>
                                 <button
@@ -1696,13 +1714,13 @@ export default function TradePage() {
                                     );
                                 })()}
                             </div>
-                        </div>
+                        </BalancesPanel>
                     </div>
 
                     {/* Right Column: Chart & Data - Added min-w-0 for grid safety */}
-                    <div className="space-y-6 flex flex-col h-full min-h-0 w-full min-w-0">
+                    <div className="space-y-4 flex flex-col h-full min-h-0 w-full min-w-0">
                         {/* Chart Section */}
-                        <div className={`flex flex-col ${TC.panel}`}>
+                        <ChartPanel>
                             <div className="flex flex-wrap items-center justify-between p-4 border-b border-neutral-100 dark:border-white/5 gap-x-4 gap-y-4">
                                 <div className="flex items-center gap-4">
                                     <h2 className="text-lg font-bold tracking-tight">{selectedSymbol.replace("USDT", "")}<span className="text-neutral-500 text-sm font-normal">/USDT</span></h2>
@@ -1730,10 +1748,10 @@ export default function TradePage() {
                             <div className="relative h-[400px] w-full p-1">
                                 <div ref={chartContainerRef} className="w-full h-full" />
                             </div>
-                        </div>
+                        </ChartPanel>
 
                         {/* Tabs & Table Section */}
-                        <div className={`flex-1 flex flex-col min-h-[500px] ${TC.panel}`}>
+                        <ActivityPanel>
                             {/* Header: Flex col on mobile, row on desktop to prevent squashing */}
                             <div className="flex flex-col md:flex-row md:items-center justify-between px-4 pt-4 pb-2 border-b border-neutral-100 dark:border-white/5 gap-4">
                                 {/* Tabs Container: Added overflow-x-auto to handle many tabs on small screen */}
@@ -1784,77 +1802,32 @@ export default function TradePage() {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-neutral-100 dark:divide-white/5">
-                                            {/* POSITIONS RENDER LOGIC */}
                                             {activeTab === "positions" && (
-                                                positionsLoading ? <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">Loading positions...</td></tr> :
-                                                    positionsError ? <tr><td colSpan={6} className={`px-5 py-8 text-center ${TC.tone.danger}`}>{positionsError}</td></tr> :
-                                                        positionsPage.length === 0 ? <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">No open positions</td></tr> :
-                                                            positionsPage.map(p => {
-                                                                const sym = String(p.symbol || "").toUpperCase();
-                                                                const realized = Number(p.realizedPnl || 0);
-                                                                const mark = Number(marketBoard[sym]?.price || 0);
-                                                                const entry = Number(p.avgPrice || 0);
-                                                                const qtyNum = Number(p.quantity || 0);
-                                                                const unrealized = (Number.isFinite(mark) && Number.isFinite(entry)) ? (mark - entry) * qtyNum : 0;
-
-                                                                return (
-                                                                    <tr key={p.id || sym} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
-                                                                        <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => setSelectedSymbol(sym)}>{sym}</td>
-                                                                        <td className="px-5 py-3 font-mono text-neutral-500">{trimZeros(qtyNum.toFixed(6))}</td>
-                                                                        <td className="px-5 py-3 font-mono">{trimZeros(entry.toFixed(6))}</td>
-                                                                        <td className="px-5 py-3 font-mono">{formatPrice(mark)}</td>
-                                                                        <td className={`px-5 py-3 font-mono ${realized >= 0 ? TC.tone.success : TC.tone.danger}`}>{realized > 0 && "+"}{trimZeros(realized.toFixed(4))}</td>
-                                                                        <td className={`px-5 py-3 font-mono ${unrealized >= 0 ? TC.tone.success : TC.tone.danger}`}>{unrealized > 0 && "+"}{trimZeros(unrealized.toFixed(4))}</td>
-                                                                    </tr>
-                                                                )
-                                                            })
+                                                <PositionsTableRows
+                                                    marketBoard={marketBoard}
+                                                    positionsError={positionsError}
+                                                    positionsLoading={positionsLoading}
+                                                    positionsPage={positionsPage}
+                                                    onSelectSymbol={setSelectedSymbol}
+                                                />
                                             )}
-
-                                            {/* ORDERS RENDER LOGIC */}
                                             {activeTab === "orders" && (
-                                                ordersLoading ? <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">Loading orders...</td></tr> :
-                                                    ordersPage.length === 0 ? <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">No order history</td></tr> :
-                                                        ordersPage.map(o => (
-                                                            <tr key={o.orderId} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
-                                                                <td className="px-5 py-3 font-mono text-xs text-neutral-500 flex items-center gap-2">
-                                                                    {String(o.orderId).slice(0, 8)}...
-                                                                    <CopyOrderButton orderId={o.orderId} isDark={isDark} onCopy={copyOrderId} />
-                                                                </td>
-                                                                <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => setSelectedSymbol(o.symbol)}>{o.symbol}</td>
-                                                                <td className="px-5 py-3">
-                                                                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${o.side === "BUY" ? TC.side.buyBadge : TC.side.sellBadge}`}>
-                                                                        {o.side}
-                                                                    </span>
-                                                                </td>
-                                                                <td className="px-5 py-3 text-neutral-500 text-xs">{o.orderType}</td>
-                                                                <td className="px-5 py-3 font-mono">{o.quantity}</td>
-                                                                <td className="px-5 py-3 text-xs font-medium">
-                                                                    <span className={`px-2 py-1 rounded border ${(ordersById[o.orderId]?.status || o.status) === "FILLED" ? TC.status.filled :
-                                                                        (ordersById[o.orderId]?.status || o.status) === "CANCELED" ? TC.status.cancelled :
-                                                                            TC.status.pending
-                                                                        }`}>
-                                                                        {ordersById[o.orderId]?.status || o.status}
-                                                                    </span>
-                                                                </td>
-                                                            </tr>
-                                                        ))
+                                                <OrdersTableRows
+                                                    copyOrderId={copyOrderId}
+                                                    isDark={isDark}
+                                                    ordersById={ordersById}
+                                                    ordersLoading={ordersLoading}
+                                                    ordersPage={ordersPage}
+                                                    onSelectSymbol={setSelectedSymbol}
+                                                />
                                             )}
-
-                                            {/* TRADES RENDER LOGIC */}
                                             {activeTab === "trades" && (
-                                                shown.length === 0 ? <tr><td colSpan={4} className="px-5 py-8 text-center text-neutral-500">Waiting for market data...</td></tr> :
-                                                    shown.map(([sym, v]) => (
-                                                        <tr key={sym} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
-                                                            <td className="px-5 py-3">
-                                                                <button onClick={() => togglePin(sym)} className={`text-sm ${pinned.has(sym) ? "text-amber-400" : "text-neutral-600 dark:text-neutral-600 hover:text-neutral-400"}`}>
-                                                                    {pinned.has(sym) ? "★" : "☆"}
-                                                                </button>
-                                                            </td>
-                                                            <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => setSelectedSymbol(sym)}>{sym}</td>
-                                                            <td className="px-5 py-3 font-mono">{formatPrice(v.price)}</td>
-                                                            <td className="px-5 py-3 text-xs text-neutral-500 tabular-nums">{v.ts ? new Date(v.ts).toLocaleTimeString() : "-"}</td>
-                                                        </tr>
-                                                    ))
+                                                <MarketBoardRows
+                                                    pinned={pinned}
+                                                    shown={shown}
+                                                    togglePin={togglePin}
+                                                    onSelectSymbol={setSelectedSymbol}
+                                                />
                                             )}
                                         </tbody>
                                     </table>
@@ -1919,7 +1892,7 @@ export default function TradePage() {
                                     </div>
                                 </div>
                             )}
-                        </div>
+                        </ActivityPanel>
                     </div>
                 </div>
             </div>
@@ -1954,6 +1927,151 @@ export default function TradePage() {
             )}
         </main>
     );
+}
+
+function MobileTerminalNav() {
+    return (
+        <nav className="mb-4 flex gap-2 overflow-x-auto pb-1 xl:hidden" aria-label="Terminal sections">
+            {MOBILE_TERMINAL_SECTIONS.map(([href, label]) => (
+                <a
+                    key={href}
+                    href={href}
+                    className={`shrink-0 px-3 py-2 text-xs font-semibold rounded-lg ${TC.secondaryButton}`}
+                >
+                    {label}
+                </a>
+            ))}
+        </nav>
+    );
+}
+
+function TerminalPanel({ id, className = "", children }) {
+    return (
+        <section id={id} className={`${TC.panel} scroll-mt-20 ${className}`}>
+            {children}
+        </section>
+    );
+}
+
+function OrderTicketPanel({ children }) {
+    return (
+        <TerminalPanel id="order-ticket" className="overflow-hidden">
+            {children}
+        </TerminalPanel>
+    );
+}
+
+function BalancesPanel({ children }) {
+    return (
+        <TerminalPanel id="account-balances" className="p-5">
+            {children}
+        </TerminalPanel>
+    );
+}
+
+function ChartPanel({ children }) {
+    return (
+        <TerminalPanel id="price-chart" className="flex flex-col overflow-hidden">
+            {children}
+        </TerminalPanel>
+    );
+}
+
+function ActivityPanel({ children }) {
+    return (
+        <TerminalPanel id="terminal-activity" className="flex min-h-[500px] flex-1 flex-col overflow-hidden">
+            {children}
+        </TerminalPanel>
+    );
+}
+
+function PositionsTableRows({ marketBoard, positionsError, positionsLoading, positionsPage, onSelectSymbol }) {
+    if (positionsLoading) {
+        return <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">Loading positions...</td></tr>;
+    }
+
+    if (positionsError) {
+        return <tr><td colSpan={6} className={`px-5 py-8 text-center ${TC.tone.danger}`}>{positionsError}</td></tr>;
+    }
+
+    if (positionsPage.length === 0) {
+        return <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">No open positions</td></tr>;
+    }
+
+    return positionsPage.map((position) => {
+        const sym = String(position.symbol || "").toUpperCase();
+        const realized = Number(position.realizedPnl || 0);
+        const mark = Number(marketBoard[sym]?.price || 0);
+        const entry = Number(position.avgPrice || 0);
+        const qtyNum = Number(position.quantity || 0);
+        const unrealized = Number.isFinite(mark) && Number.isFinite(entry) ? (mark - entry) * qtyNum : 0;
+
+        return (
+            <tr key={position.id || sym} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
+                <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(sym)}>{sym}</td>
+                <td className="px-5 py-3 font-mono text-neutral-500">{trimZeros(qtyNum.toFixed(6))}</td>
+                <td className="px-5 py-3 font-mono">{trimZeros(entry.toFixed(6))}</td>
+                <td className="px-5 py-3 font-mono">{formatPrice(mark)}</td>
+                <td className={`px-5 py-3 font-mono ${realized >= 0 ? TC.tone.success : TC.tone.danger}`}>{realized > 0 && "+"}{trimZeros(realized.toFixed(4))}</td>
+                <td className={`px-5 py-3 font-mono ${unrealized >= 0 ? TC.tone.success : TC.tone.danger}`}>{unrealized > 0 && "+"}{trimZeros(unrealized.toFixed(4))}</td>
+            </tr>
+        );
+    });
+}
+
+function OrdersTableRows({ copyOrderId, isDark, ordersById, ordersLoading, ordersPage, onSelectSymbol }) {
+    if (ordersLoading) {
+        return <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">Loading orders...</td></tr>;
+    }
+
+    if (ordersPage.length === 0) {
+        return <tr><td colSpan={6} className="px-5 py-8 text-center text-neutral-500">No order history</td></tr>;
+    }
+
+    return ordersPage.map((order) => {
+        const status = ordersById[order.orderId]?.status || order.status;
+
+        return (
+            <tr key={order.orderId} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
+                <td className="px-5 py-3 font-mono text-xs text-neutral-500 flex items-center gap-2">
+                    {String(order.orderId).slice(0, 8)}...
+                    <CopyOrderButton orderId={order.orderId} isDark={isDark} onCopy={copyOrderId} />
+                </td>
+                <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(order.symbol)}>{order.symbol}</td>
+                <td className="px-5 py-3">
+                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${order.side === "BUY" ? TC.side.buyBadge : TC.side.sellBadge}`}>
+                        {order.side}
+                    </span>
+                </td>
+                <td className="px-5 py-3 text-neutral-500 text-xs">{order.orderType}</td>
+                <td className="px-5 py-3 font-mono">{order.quantity}</td>
+                <td className="px-5 py-3 text-xs font-medium">
+                    <span className={`px-2 py-1 rounded border ${status === "FILLED" ? TC.status.filled : status === "CANCELED" ? TC.status.cancelled : TC.status.pending}`}>
+                        {status}
+                    </span>
+                </td>
+            </tr>
+        );
+    });
+}
+
+function MarketBoardRows({ pinned, shown, togglePin, onSelectSymbol }) {
+    if (shown.length === 0) {
+        return <tr><td colSpan={4} className="px-5 py-8 text-center text-neutral-500">Waiting for market data...</td></tr>;
+    }
+
+    return shown.map(([sym, value]) => (
+        <tr key={sym} className="hover:bg-neutral-50 dark:hover:bg-white/5 transition-colors">
+            <td className="px-5 py-3">
+                <button onClick={() => togglePin(sym)} className={`text-sm ${pinned.has(sym) ? "text-amber-400" : "text-neutral-600 dark:text-neutral-600 hover:text-neutral-400"}`}>
+                    {pinned.has(sym) ? "★" : "☆"}
+                </button>
+            </td>
+            <td className={`px-5 py-3 font-medium cursor-pointer ${TC.symbolLink}`} onClick={() => onSelectSymbol(sym)}>{sym}</td>
+            <td className="px-5 py-3 font-mono">{formatPrice(value.price)}</td>
+            <td className="px-5 py-3 text-xs text-neutral-500 tabular-nums">{value.ts ? new Date(value.ts).toLocaleTimeString() : "-"}</td>
+        </tr>
+    ));
 }
 
 
