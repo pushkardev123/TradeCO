@@ -115,7 +115,16 @@ NEXT_PUBLIC_WS_URL=wss://tradeco.example.com/ws/prices
 NEXT_PUBLIC_ENABLE_ADVANCED_ORDERS=true
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
+REFRESH_COOKIE_PATH=/api/auth
 ```
+
+`REFRESH_COOKIE_PATH` must match the public URL path, not the backend route. nginx
+maps `/api/` to the backend's `/`, so the browser calls `/api/auth/refresh`; leaving
+the default `/auth` scopes the cookie to a path the browser never requests and every
+refresh fails with 401.
+
+The `NEXT_PUBLIC_*` values are baked into the frontend image at build time. Changing
+them requires rebuilding the image, not just restarting the container.
 
 Then rebuild:
 

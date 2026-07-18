@@ -4,8 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import Image from "next/image";
-import { register } from "../lib/auth";
 import Link from "next/link";
+import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
+import { register } from "../lib/auth";
+import { useTheme } from "../lib/theme";
 
 // Signup schema: email + password + Binance keys
 const signupSchema = z
@@ -21,8 +23,33 @@ const signupSchema = z
         path: ["confirmPassword"],
     });
 
+// Defined at module scope (NOT inside SignupPage) so it keeps a stable
+// identity across renders. If this lived inside the component it would be
+// re-created on every keystroke, causing React to unmount/remount the input
+// and lose focus after each character.
+function InputField({ label, name, type = "text", placeholder, value, error, onChange, autoComplete = "off" }) {
+    return (
+        <div className="tc-field" style={{ marginBottom: 0 }}>
+            <label htmlFor={name}>{label}</label>
+            <div className={`tc-inp ${error ? "error" : ""}`}>
+                <input
+                    id={name}
+                    name={name}
+                    type={type}
+                    value={value}
+                    onChange={onChange}
+                    placeholder={placeholder}
+                    autoComplete={autoComplete}
+                />
+            </div>
+            {error && <p className="tc-field-error">{error}</p>}
+        </div>
+    );
+}
+
 export default function SignupPage() {
     const router = useRouter();
+    const { isDark, themeClass, toggleTheme } = useTheme();
 
     const [form, setForm] = useState({
         email: "",
@@ -75,88 +102,85 @@ export default function SignupPage() {
         }
     }
 
-    // Shared Input Component for consistency
-    const InputField = ({ label, name, type = "text", placeholder }) => (
-        <div>
-            <label className="block text-xs font-medium text-neutral-400 mb-1.5 ml-1">
-                {label}
-            </label>
-            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${errors[name]
-                ? "bg-rose-950/10 border-rose-500/50 focus-within:border-rose-500"
-                : "bg-[#09090b] border-white/10 focus-within:border-white/30"
-                }`}>
-                <input
-                    name={name}
-                    type={type}
-                    value={form[name]}
-                    onChange={handleChange}
-                    className="bg-transparent text-sm w-full outline-none text-neutral-200 placeholder:text-neutral-600"
-                    placeholder={placeholder}
-                    autoComplete="off"
-                />
-            </div>
-            {errors[name] && <p className="text-xs text-rose-400 mt-1.5 ml-1">{errors[name]}</p>}
-        </div>
-    );
-
     return (
-        <main className="min-h-screen w-full flex items-center justify-center bg-[#09090b] text-neutral-200 p-4">
-            <div className="w-full max-w-md space-y-6">
+        <main className={`${themeClass} tc-root tc-auth`}>
+            <div className="tc-auth-topbar">
+                <Link href="/" className="tc-btn tc-btn-ghost" style={{ padding: "8px 14px" }}>
+                    ← Home
+                </Link>
+                <button type="button" onClick={toggleTheme} className="tc-icon-btn" aria-label="Toggle color theme">
+                    {isDark ? <MdDarkMode /> : <MdOutlineLightMode />}
+                </button>
+            </div>
 
-                {/* Header / Logo */}
-                <div className="flex flex-col items-center text-center space-y-2">
-                    <div className="flex items-center gap-2 mb-2">
-                        <Image src="/logo.svg" alt="Logo" className="invert opacity-90" width={150} height={100} />
-                    </div>
-                    <h1 className="text-2xl font-bold tracking-tight text-white">Create an account</h1>
-                    <p className="text-sm text-neutral-400">Enter your Binance Testnet keys to get started.</p>
+            <div className="tc-auth-card-wrap" style={{ maxWidth: 460 }}>
+                <div className="tc-auth-head">
+                    <span className="tc-brand">
+                        <Image src="/logo.svg" alt="TradeCO" width={150} height={44} priority className={`h-8 w-auto ${isDark ? "invert" : ""}`} />
+                    </span>
+                    <h1>Create an account</h1>
+                    <p>Enter your Binance Testnet keys to get started.</p>
                 </div>
 
-                {/* Card */}
-                <div className="bg-[#111] border border-white/10 rounded-2xl p-6 md:p-8 shadow-2xl shadow-black/50">
-                    <form onSubmit={onSubmit} className="space-y-5">
-                        <InputField label="Email" name="email" type="email" placeholder="name@example.com" />
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <InputField label="Password" name="password" type="password" placeholder="••••••" />
-                            <InputField label="Confirm" name="confirmPassword" type="password" placeholder="••••••" />
-                        </div>
-
-                        <div className="space-y-5 pt-2">
-                            <div className="flex items-center gap-2">
-                                <div className="h-px bg-white/10 flex-1"></div>
-                                <span className="text-[10px] uppercase tracking-widest text-neutral-500 font-semibold">API Keys</span>
-                                <div className="h-px bg-white/10 flex-1"></div>
+                <div className="tc-panel">
+                    <form onSubmit={onSubmit} noValidate>
+                        <div className="tc-field">
+                            <label htmlFor="email">Email</label>
+                            <div className={`tc-inp ${errors.email ? "error" : ""}`}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                                    <path d="m3 7 9 6 9-6" />
+                                </svg>
+                                <input
+                                    id="email"
+                                    name="email"
+                                    type="email"
+                                    value={form.email}
+                                    onChange={handleChange}
+                                    placeholder="name@example.com"
+                                    autoComplete="email"
+                                />
                             </div>
-                            <InputField label="Binance API Key" name="binanceApiKey" placeholder="Paste your API Key" />
-                            <InputField label="Binance Secret Key" name="binanceSecretKey" type="password" placeholder="Paste your Secret Key" />
-                            <Link href="https://testnet.binance.vision" target="_blank" className="text-xs text-neutral-400 hover:underline underline-offset-4 decoration-neutral-700 transition-all">
-                                Don&apos;t have Testnet keys? Create them here.
-                            </Link>
+                            {errors.email && <p className="tc-field-error">{errors.email}</p>}
                         </div>
 
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full py-3 text-sm font-bold bg-white text-black rounded-lg hover:bg-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] mt-2"
-                        >
-                            {loading ? "Creating account..." : "Sign Up"}
+                        <div className="tc-two">
+                            <InputField label="Password" name="password" type="password" placeholder="••••••" value={form.password} error={errors.password} onChange={handleChange} autoComplete="new-password" />
+                            <InputField label="Confirm" name="confirmPassword" type="password" placeholder="••••••" value={form.confirmPassword} error={errors.confirmPassword} onChange={handleChange} autoComplete="new-password" />
+                        </div>
+
+                        <div className="tc-divider">
+                            <div className="ln" />
+                            <span>API Keys</span>
+                            <div className="ln" />
+                        </div>
+
+                        <div className="tc-keyrow">
+                            <span className="lock">🔒</span> Encrypted at rest — stored separately from your account, never logged.
+                        </div>
+
+                        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                            <InputField label="Binance API Key" name="binanceApiKey" placeholder="Paste your API Key" value={form.binanceApiKey} error={errors.binanceApiKey} onChange={handleChange} />
+                            <InputField label="Binance Secret Key" name="binanceSecretKey" type="password" placeholder="Paste your Secret Key" value={form.binanceSecretKey} error={errors.binanceSecretKey} onChange={handleChange} />
+                        </div>
+
+                        <p className="tc-hint" style={{ marginTop: 12 }}>
+                            Don&apos;t have Testnet keys?{" "}
+                            <Link href="https://testnet.binance.vision" target="_blank">
+                                Create them here →
+                            </Link>
+                        </p>
+
+                        <button type="submit" disabled={loading} className="tc-submit accent" style={{ marginTop: 14 }}>
+                            {loading ? "Creating account..." : "Create account"}
                         </button>
                     </form>
 
-                    {serverMsg && (
-                        <div className="mt-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm text-center">
-                            {serverMsg}
-                        </div>
-                    )}
+                    {serverMsg && <div className="tc-server-msg">{serverMsg}</div>}
                 </div>
 
-                {/* Footer Link */}
-                <p className="text-center text-sm text-neutral-500">
-                    Already have an account?{" "}
-                    <button onClick={() => router.push("/login")} className="text-white hover:underline underline-offset-4 decoration-neutral-700 transition-all">
-                        Sign in
-                    </button>
+                <p className="tc-auth-foot">
+                    Already have an account? <Link href="/login">Sign in</Link>
                 </p>
             </div>
         </main>

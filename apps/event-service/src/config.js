@@ -62,12 +62,19 @@ function parseCorsOrigins(value, errors) {
         return [DEFAULT_CORS_ORIGIN];
     }
 
+    // Normalize to URL origins so a trailing slash or uppercase host in
+    // CORS_ORIGIN still matches the browser's Origin header exactly.
+    const normalized = [];
     for (const origin of origins) {
-        if (origin === "*") continue;
-        validateUrl("CORS_ORIGIN", origin, ["http:", "https:"], errors);
+        if (origin === "*") {
+            normalized.push("*");
+            continue;
+        }
+        const parsed = validateUrl("CORS_ORIGIN", origin, ["http:", "https:"], errors);
+        normalized.push(parsed ? parsed.origin : origin);
     }
 
-    return origins;
+    return normalized;
 }
 
 export function redactUrl(value) {

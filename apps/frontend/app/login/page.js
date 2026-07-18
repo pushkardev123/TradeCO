@@ -4,7 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import Image from "next/image";
+import Link from "next/link";
+import { MdDarkMode, MdOutlineLightMode } from "react-icons/md";
 import { login } from "../lib/auth";
+import { useTheme } from "../lib/theme";
 
 const loginSchema = z.object({
     email: z.string().email("Enter a valid email address"),
@@ -13,6 +16,7 @@ const loginSchema = z.object({
 
 export default function LoginPage() {
     const router = useRouter();
+    const { isDark, themeClass, toggleTheme } = useTheme();
 
     const [form, setForm] = useState({ email: "", password: "" });
     const [errors, setErrors] = useState({});
@@ -53,76 +57,77 @@ export default function LoginPage() {
     }
 
     return (
-        <main className="min-h-screen w-full flex items-center justify-center bg-[#09090b] text-neutral-200 p-4">
-            <div className="w-full max-w-[400px] space-y-6">
+        <main className={`${themeClass} tc-root tc-auth`}>
+            <div className="tc-auth-topbar">
+                <Link href="/" className="tc-btn tc-btn-ghost" style={{ padding: "8px 14px" }}>
+                    ← Home
+                </Link>
+                <button type="button" onClick={toggleTheme} className="tc-icon-btn" aria-label="Toggle color theme">
+                    {isDark ? <MdDarkMode /> : <MdOutlineLightMode />}
+                </button>
+            </div>
 
-                {/* Header */}
-                <div className="flex flex-col items-center text-center space-y-2">
-                    <div className="flex items-center gap-2 mb-2">
-                        <Image src="/logo.svg" alt="Logo" className="invert opacity-90" width={150} height={100} />
-                    </div>
-                    <h1 className="text-2xl font-bold tracking-tight text-white">Welcome back</h1>
-                    <p className="text-sm text-neutral-400">Enter your details to access your portfolio.</p>
+            <div className="tc-auth-card-wrap">
+                <div className="tc-auth-head">
+                    <span className="tc-brand">
+                        <Image src="/logo.svg" alt="TradeCO" width={150} height={44} priority className={`h-8 w-auto ${isDark ? "invert" : ""}`} />
+                    </span>
+                    <h1>Welcome back</h1>
+                    <p>Enter your details to access your portfolio.</p>
                 </div>
 
-                {/* Card */}
-                <div className="bg-[#111] border border-white/10 rounded-2xl p-6 md:p-8 shadow-2xl shadow-black/50">
-                    <form onSubmit={onSubmit} className="space-y-5">
-
-                        <div>
-                            <label className="block text-xs font-medium text-neutral-400 mb-1.5 ml-1">Email</label>
-                            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${errors.email ? "bg-rose-950/10 border-rose-500/50" : "bg-[#09090b] border-white/10 focus-within:border-white/30"}`}>
+                <div className="tc-panel">
+                    <form onSubmit={onSubmit} noValidate>
+                        <div className="tc-field">
+                            <label htmlFor="email">Email</label>
+                            <div className={`tc-inp ${errors.email ? "error" : ""}`}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                                    <path d="m3 7 9 6 9-6" />
+                                </svg>
                                 <input
+                                    id="email"
                                     name="email"
                                     type="email"
                                     value={form.email}
                                     onChange={handleChange}
-                                    className="bg-transparent text-sm w-full outline-none text-neutral-200 placeholder:text-neutral-600"
                                     placeholder="name@example.com"
                                     autoComplete="email"
                                 />
                             </div>
-                            {errors.email && <p className="text-xs text-rose-400 mt-1.5 ml-1">{errors.email}</p>}
+                            {errors.email && <p className="tc-field-error">{errors.email}</p>}
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-medium text-neutral-400 mb-1.5 ml-1">Password</label>
-                            <div className={`flex items-center px-3 py-2.5 rounded-lg border transition-all ${errors.password ? "bg-rose-950/10 border-rose-500/50" : "bg-[#09090b] border-white/10 focus-within:border-white/30"}`}>
+                        <div className="tc-field">
+                            <label htmlFor="password">Password</label>
+                            <div className={`tc-inp ${errors.password ? "error" : ""}`}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <rect x="4" y="10" width="16" height="10" rx="2" />
+                                    <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                                </svg>
                                 <input
+                                    id="password"
                                     name="password"
                                     type="password"
                                     value={form.password}
                                     onChange={handleChange}
-                                    className="bg-transparent text-sm w-full outline-none text-neutral-200 placeholder:text-neutral-600"
                                     placeholder="••••••••"
                                     autoComplete="current-password"
                                 />
                             </div>
-                            {errors.password && <p className="text-xs text-rose-400 mt-1.5 ml-1">{errors.password}</p>}
+                            {errors.password && <p className="tc-field-error">{errors.password}</p>}
                         </div>
 
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full py-3 text-sm font-bold bg-white text-black rounded-lg hover:bg-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] mt-2"
-                        >
+                        <button type="submit" disabled={loading} className="tc-submit">
                             {loading ? "Signing in..." : "Sign In"}
                         </button>
                     </form>
 
-                    {serverMsg && (
-                        <div className="mt-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm text-center">
-                            {serverMsg}
-                        </div>
-                    )}
+                    {serverMsg && <div className="tc-server-msg">{serverMsg}</div>}
                 </div>
 
-                {/* Footer Link */}
-                <p className="text-center text-sm text-neutral-500">
-                    Don’t have an account?{" "}
-                    <button onClick={() => router.push("/register")} className="text-white hover:underline underline-offset-4 decoration-neutral-700 transition-all">
-                        Sign up
-                    </button>
+                <p className="tc-auth-foot">
+                    Don&apos;t have an account? <Link href="/register">Sign up</Link>
                 </p>
             </div>
         </main>

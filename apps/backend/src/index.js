@@ -75,12 +75,23 @@ app.use((req, res, next) => {
 
     next();
 });
+// Reject disallowed origins explicitly. Passing an Error to the cors origin
+// callback surfaces as an unhandled 500 with a stack trace, which the browser
+// reports only as an opaque CORS failure.
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (isCorsOriginAllowed(origin)) return next();
+
+    logger.warn("cors.origin_rejected", {
+        requestId: req.requestId,
+        origin,
+        path: req.path || req.url,
+    });
+    return res.status(403).json({ ok: false, error: "CORS origin not allowed" });
+});
 app.use(cors({
     origin(origin, callback) {
-        if (isCorsOriginAllowed(origin)) {
-            return callback(null, true);
-        }
-        return callback(new Error("CORS origin not allowed"));
+        return callback(null, isCorsOriginAllowed(origin));
     },
     credentials: true,
 }));

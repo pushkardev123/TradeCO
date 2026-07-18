@@ -28,5 +28,8 @@
         "test:brand-tokens": "npm --workspace @tradeco/brand-tokens run test",
         "test:observability": "npm --workspace @tradeco/observability run test",
         "test:stream-contracts": "npm --workspace @tradeco/redis-stream-contracts run test"
+    },
+    "devDependencies": {
+        "tailwindcss": "^4"
     }
 }

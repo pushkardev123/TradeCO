@@ -2,6 +2,11 @@ import { REFRESH_TOKEN_TTL_DAYS } from "./refreshToken.js";
 
 export const REFRESH_COOKIE_NAME = process.env.REFRESH_COOKIE_NAME || "tradeco_refresh";
 
+// Must match the public URL path the browser uses, not the backend's internal
+// route. Behind a proxy that maps /api/ -> backend /, set this to /api/auth or
+// the browser will scope the cookie to /auth and never send it back.
+export const REFRESH_COOKIE_PATH = process.env.REFRESH_COOKIE_PATH || "/auth";
+
 function parseCookies(header) {
     const out = {};
     for (const part of String(header || "").split(";")) {
@@ -37,7 +42,7 @@ export function setRefreshCookie(res, refreshToken) {
         secure: boolFromEnv("AUTH_COOKIE_SECURE", process.env.NODE_ENV === "production"),
         sameSite: process.env.AUTH_COOKIE_SAME_SITE || "lax",
         maxAge: REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
-        path: "/auth",
+        path: REFRESH_COOKIE_PATH,
     });
 }
 
@@ -46,6 +51,6 @@ export function clearRefreshCookie(res) {
         httpOnly: true,
         secure: boolFromEnv("AUTH_COOKIE_SECURE", process.env.NODE_ENV === "production"),
         sameSite: process.env.AUTH_COOKIE_SAME_SITE || "lax",
-        path: "/auth",
+        path: REFRESH_COOKIE_PATH,
     });
 }

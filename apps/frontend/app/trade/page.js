@@ -1402,8 +1402,8 @@ export default function TradePage() {
                 : [];
 
         applyChartSnapshot(normalizeCandleSet(candles), { source: json?.source || "REST" });
-    // Chart helpers are function declarations that read refs/setters; the endpoint URL is the only external input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // Chart helpers are function declarations that read refs/setters; the endpoint URL is the only external input.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [eventBaseUrl]);
 
     const requestMarketDetails = useCallback(async function requestMarketDetails(symbol, action = "subscribe") {
@@ -1473,8 +1473,8 @@ export default function TradePage() {
             chartApiRef.current = null;
             candleSeriesRef.current = null;
         };
-    // The chart instance is mounted after auth reveals the chart container; theme/data updates are handled separately.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // The chart instance is mounted after auth reveals the chart container; theme/data updates are handled separately.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [authReady]);
 
     // 2) Update chart colors when theme changes (do NOT wipe data)
@@ -1599,8 +1599,8 @@ export default function TradePage() {
                 retryTimer = setInterval(() => {
                     if (cancelled) return;
                     if (chartReadyRef.current) return;
-                    requestChartStream(symbol, interval, "subscribe").catch(() => {});
-                    fetchChartSnapshot(symbol, interval).catch(() => {});
+                    requestChartStream(symbol, interval, "subscribe").catch(() => { });
+                    fetchChartSnapshot(symbol, interval).catch(() => { });
                 }, 8000);
             };
 
@@ -1654,10 +1654,10 @@ export default function TradePage() {
             try {
                 ws?.close();
             } catch { }
-            requestChartStream(symbol, interval, "unsubscribe").catch(() => {});
+            requestChartStream(symbol, interval, "unsubscribe").catch(() => { });
         };
-    // Chart helpers are function declarations and use refs/setters; this socket is scoped by auth, URL, symbol, and interval.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // Chart helpers are function declarations and use refs/setters; this socket is scoped by auth, URL, symbol, and interval.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [authReady, selectedSymbol, chartInterval, pricesWsUrl, requestChartStream, fetchChartSnapshot]);
 
     useEffect(() => {
@@ -1670,7 +1670,7 @@ export default function TradePage() {
             .catch(() => setMarketDetailError("Market depth stream unavailable"));
 
         return () => {
-            requestMarketDetails(symbol, "unsubscribe").catch(() => {});
+            requestMarketDetails(symbol, "unsubscribe").catch(() => { });
         };
     }, [authReady, selectedSymbol, requestMarketDetails]);
 

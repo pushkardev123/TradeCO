@@ -79,10 +79,13 @@ services:
     environment:
       <<: *service-env
       PORT: 8080
-      CORS_ORIGIN: ${PUBLIC_APP_ORIGIN:-http://localhost:3000}
+      # Defaults to the app origin. Set CORS_ORIGIN explicitly (comma-separated)
+      # to allow additional origins, e.g. a local frontend during development.
+      CORS_ORIGIN: ${CORS_ORIGIN:-${PUBLIC_APP_ORIGIN:-http://localhost:3000}}
       JWT_ACCESS_TTL_SECONDS: ${JWT_ACCESS_TTL_SECONDS:-900}
       REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
       REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-tradeco_refresh}
+      REFRESH_COOKIE_PATH: ${REFRESH_COOKIE_PATH:-/auth}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-lax}
     ports:
@@ -103,7 +106,7 @@ services:
     environment:
       <<: *service-env
       PORT: 8081
-      CORS_ORIGIN: ${PUBLIC_APP_ORIGIN:-http://localhost:3000}
+      CORS_ORIGIN: ${CORS_ORIGIN:-${PUBLIC_APP_ORIGIN:-http://localhost:3000}}
     ports:
       - "${EVENT_SERVICE_PORT:-8081}:8081"
     depends_on:
