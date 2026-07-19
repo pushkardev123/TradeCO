@@ -66,6 +66,19 @@ const ORDER_PERCENT_PRESETS = Object.freeze([25, 50, 75, 100]);
 const TC = TRADECO_WEB_CLASSES;
 const CHART_VISIBLE_BARS = 120;
 
+function chartThemeOptions(isDark) {
+    return {
+        layout: {
+            background: { color: isDark ? "#0a0a0a" : "#ffffff" },
+            textColor: isDark ? "#a1a1aa" : "#334155",
+        },
+        grid: {
+            vertLines: { color: isDark ? "#1c1c1f" : "#e2e8f0" },
+            horzLines: { color: isDark ? "#1c1c1f" : "#e2e8f0" },
+        },
+    };
+}
+
 export default function TradePage() {
     const router = useRouter();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -170,6 +183,8 @@ export default function TradePage() {
     const candleSeriesRef = useRef(null);
     const pendingChartSnapshotRef = useRef(null);
     const chartReadyRef = useRef(false);
+    const chartBarsRef = useRef([]);
+    const isDarkRef = useRef(false);
     const selectedSymbolRef = useRef(selectedSymbol);
     const chartIntervalRef = useRef(chartInterval);
     const ordersCursorRef = useRef(ordersCursor);
@@ -862,6 +877,37 @@ export default function TradePage() {
         return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
     }
 
+    // Testnet books are thin, so a single wick can be hundreds of dollars away
+    // from every other bar. Left alone the price scale stretches to include it
+    // and squashes real price action into a sliver, which reads as the chart
+    // randomly zooming as that bar scrolls in and out of view. Scale to the
+    // 1st..99th percentile of visible bars instead; outliers still draw, they
+    // just no longer dictate the range.
+    function robustAutoscaleProvider(original) {
+        const bars = chartBarsRef.current;
+        const chart = chartApiRef.current;
+        if (!chart || !Array.isArray(bars) || bars.length < 12) return original();
+
+        const range = chart.timeScale().getVisibleLogicalRange();
+        if (!range) return original();
+
+        const from = Math.max(0, Math.floor(range.from));
+        const to = Math.min(bars.length, Math.ceil(range.to));
+        const slice = bars.slice(from, to);
+        if (slice.length < 12) return original();
+
+        const lows = slice.map((bar) => bar.low).sort((a, b) => a - b);
+        const highs = slice.map((bar) => bar.high).sort((a, b) => a - b);
+        const at = (arr, p) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(p * (arr.length - 1))))];
+
+        const low = at(lows, 0.01);
+        const high = at(highs, 0.99);
+        if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return original();
+
+        const pad = (high - low) * 0.08;
+        return { priceRange: { minValue: low - pad, maxValue: high + pad } };
+    }
+
     function fitChartToRecentBars(bars) {
         const chart = chartApiRef.current;
         if (!chart) return;
@@ -892,6 +938,7 @@ export default function TradePage() {
 
         if (!Array.isArray(bars) || bars.length === 0) {
             series.setData([]);
+            chartBarsRef.current = [];
             chartReadyRef.current = false;
             setChartStatus("empty");
             setChartError("No candles returned for this market and interval.");
@@ -910,6 +957,7 @@ export default function TradePage() {
 
         try {
             series.setData(bars);
+            chartBarsRef.current = bars;
             fitChartToRecentBars(bars);
             pendingChartSnapshotRef.current = null;
         } catch (error) {
@@ -934,6 +982,10 @@ export default function TradePage() {
 
         try {
             series.update(bar);
+            const bars = chartBarsRef.current;
+            const last = bars[bars.length - 1];
+            if (last && last.time === bar.time) bars[bars.length - 1] = bar;
+            else if (!last || bar.time > last.time) bars.push(bar);
         } catch (error) {
             setChartStatus("error");
             setChartError(error?.message || "Unable to apply live candle update.");
@@ -1421,6 +1473,7 @@ export default function TradePage() {
     }, [eventBaseUrl]);
 
     const isDark = theme === "dark";
+    isDarkRef.current = isDark;
 
 
     // 1) Create the chart ONCE (do not recreate on theme toggle)
@@ -1442,21 +1495,19 @@ export default function TradePage() {
         chartApiRef.current = null;
         candleSeriesRef.current = null;
 
+        // The chart mounts after auth resolves, so it must be built with the
+        // current theme. The [isDark] effect below only fires on a theme change
+        // and would leave a chart created here stuck on light colors.
         const chart = createChart(el, {
             autoSize: true,
             crosshair: { mode: CrosshairMode.Normal },
             timeScale: { timeVisible: true, secondsVisible: false },
-            layout: {
-                background: { color: "#ffffff" },
-                textColor: "#334155",
-            },
-            grid: {
-                vertLines: { color: "#e2e8f0" },
-                horzLines: { color: "#e2e8f0" },
-            },
+            ...chartThemeOptions(isDarkRef.current),
         });
 
-        const series = chart.addSeries(CandlestickSeries, {});
+        const series = chart.addSeries(CandlestickSeries, {
+            autoscaleInfoProvider: robustAutoscaleProvider,
+        });
         chartApiRef.current = chart;
         candleSeriesRef.current = series;
         if (pendingChartSnapshotRef.current) {
@@ -1482,16 +1533,8 @@ export default function TradePage() {
         const chart = chartApiRef.current;
         if (!chart) return;
 
-        chart.applyOptions({
-            layout: {
-                background: { color: isDark ? "#020617" : "#ffffff" },
-                textColor: isDark ? "#cbd5e1" : "#334155",
-            },
-            grid: {
-                vertLines: { color: isDark ? "#0f172a" : "#e2e8f0" },
-                horzLines: { color: isDark ? "#0f172a" : "#e2e8f0" },
-            },
-        });
+        isDarkRef.current = isDark;
+        chart.applyOptions(chartThemeOptions(isDark));
 
         // Optional: candle style tweaks for dark mode (keeps data intact)
         const series = candleSeriesRef.current;
@@ -2054,35 +2097,17 @@ export default function TradePage() {
             </div>
 
             <div className="max-w-[1920px] mx-auto px-3 py-4 sm:px-4 lg:px-6 lg:py-5">
-                <div className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
-                    <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                            <h1 className="text-xl font-semibold tracking-tight">Portfolio & Trade</h1>
-                            <span className={`rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${TC.tone.info}`}>
-                                Binance Spot Testnet
-                            </span>
-                        </div>
-                        <div className={`mt-1 text-xs ${TC.text.muted}`}>
-                            {baseAsset}/{quoteAsset} execution workspace · {openOrderRows.length} open · {trackedOrderCount} realtime tracked · {lastReplayLabel}
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[620px]">
-                        <TerminalMetric label="Last price" value={formatPrice(currentPrice)} tone={TC.text.primary} />
-                        <TerminalMetric label="Spread" value={topBookSpread} tone={orderBook.status === "ready" ? TC.tone.success : TC.tone.warning} />
-                        <TerminalMetric label="Assets" value={String(activeAssetsCount)} tone={TC.text.primary} />
-                        <TerminalMetric label="Events" value={`${wsMsgCount} · ${lastMarketUpdateLabel}`} tone={lastEventLabel === "No events" ? TC.text.muted : TC.tone.info} />
-                    </div>
-                </div>
-
-                <AccountReadinessPanel
-                    accountLabel={accountLabel}
-                    credentialLabel={credentialLabel}
+                <MarketHeader
+                    baseAsset={baseAsset}
+                    quoteAsset={quoteAsset}
+                    lastPrice={formatPrice(currentPrice)}
+                    hasPrice={Number.isFinite(Number(currentPrice))}
+                    spread={topBookSpread}
+                    bookReady={orderBook.status === "ready"}
+                    openOrderCount={openOrderRows.length}
                     hasExchangeCredential={hasExchangeCredential}
                     balancesError={balancesError}
                     balancesLoading={balancesLoading}
-                    connectionLabel={connectionLabel}
-                    connectionTone={connectionTone}
-                    lastReplayLabel={lastReplayLabel}
                     onRefresh={() => {
                         fetchBalances();
                         fetchOpenOrders();
@@ -2096,11 +2121,16 @@ export default function TradePage() {
                     setActiveTab={setActiveTab}
                 />
 
-                <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_420px] 2xl:grid-cols-[380px_minmax(0,1fr)_460px]">
-                    {/* Left Column: Controls */}
-                    <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
+                {/* Workspace row: ticket | chart | book. Columns stretch to a
+                    shared height so no column ends early and leaves a void. */}
+                {/* At xl the workspace is a fixed-height terminal shell: every
+                    panel fills the row and scrolls internally, so no panel ends
+                    short and leaves a void. Below xl it stacks and grows. */}
+                <div className="grid items-stretch gap-3 md:grid-cols-[minmax(0,1fr)_320px] xl:h-[calc(100vh-11rem)] xl:min-h-[560px] xl:grid-cols-[340px_minmax(0,1fr)_340px] 2xl:grid-cols-[360px_minmax(0,1fr)_380px]">
+                    {/* Ticket: drawer below xl, first column at xl */}
+                    <div className="hidden min-h-0 min-w-0 xl:flex xl:flex-col">
 
-                        <div className="hidden xl:block">
+                        <div className="hidden min-h-0 flex-1 xl:flex xl:flex-col">
                             <OrderTicketPanel>
                                 <OrderTicketContent
                                     apiMsg={apiMsg}
@@ -2148,31 +2178,17 @@ export default function TradePage() {
                             </OrderTicketPanel>
                         </div>
 
-                        {/* Account Summary */}
-                        <PortfolioPanel
-                            balancesError={balancesError}
-                            balancesLoading={balancesLoading}
-                            balancesUpdatedAt={balancesUpdatedAt}
-                            baseAsset={baseAsset}
-                            baseFree={baseFree}
-                            baseLocked={baseLocked}
-                            hasExchangeCredential={hasExchangeCredential}
-                            onRefresh={fetchBalances}
-                            onSelectSymbol={setSelectedSymbol}
-                            portfolioRows={visiblePortfolioRows}
-                            quoteAsset={quoteAsset}
-                            quoteFree={quoteFree}
-                            quoteLocked={quoteLocked}
-                            totalPortfolioValue={totalPortfolioValue}
-                        />
                     </div>
 
-                    {/* Center Column: Chart Workspace */}
-                    <div className="space-y-4 flex flex-col h-full min-h-0 w-full min-w-0">
+                    {/* Chart */}
+                    <div className="flex min-h-0 min-w-0 flex-col">
                         {/* Chart Section */}
                         <ChartPanel>
-                            <div className="flex flex-wrap items-center justify-between p-4 border-b border-neutral-100 dark:border-white/5 gap-x-4 gap-y-4">
-                                <div className="flex min-w-0 flex-wrap items-center gap-4">
+                            {/* One control row. The price lives in the page
+                                header; repeating it here was noise, and chart
+                                status only earns space when it is not live. */}
+                            <div className="flex items-center gap-3 border-b border-neutral-100 px-3 py-2.5 dark:border-white/5">
+                                <div className="min-w-0 flex-1">
                                     <MarketSwitcher
                                         favoriteRows={favoriteRows}
                                         filter={filter}
@@ -2184,36 +2200,30 @@ export default function TradePage() {
                                         togglePin={togglePin}
                                         totalSymbols={totalSymbols}
                                     />
-                                    <div className="h-4 w-[1px] bg-neutral-200 dark:bg-white/10"></div>
-                                    <div className={`font-mono text-lg font-medium tracking-tight ${isDark ? "text-white" : "text-neutral-900"}`}>
-                                        {formatPrice(currentPrice)}
-                                    </div>
-                                    <div className={`hidden rounded-full border px-2.5 py-1 text-[11px] font-medium sm:block ${chartStatusClass}`}>
-                                        {chartStatusLabel}
-                                    </div>
                                 </div>
 
-                                <div className="flex flex-wrap items-center gap-3">
-                                    <div className={`text-[11px] ${TC.text.muted}`}>
-                                        {chartMeta.candleCount ? `${chartMeta.candleCount} bars` : "No bars"} · Last {lastCandleLabel}
-                                    </div>
-                                    <div className={`flex rounded-lg overflow-hidden border ${TC.segment}`}>
-                                        {["1m", "5m", "1d", "1w"].map((t) => (
-                                            <button
-                                                key={t}
-                                                onClick={() => setChartInterval(t)}
-                                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${t === chartInterval
-                                                    ? TC.segmentActive
-                                                    : TC.segmentInactive}`}
-                                            >
-                                                {t}
-                                            </button>
-                                        ))}
-                                    </div>
+                                {chartStatus !== "ready" && (
+                                    <span className={`hidden shrink-0 text-[11px] font-medium sm:inline ${chartStatusClass}`}>
+                                        {chartStatusLabel}
+                                    </span>
+                                )}
+
+                                <div className={`flex shrink-0 overflow-hidden rounded-lg border ${TC.segment}`}>
+                                    {["1m", "5m", "1d", "1w"].map((t) => (
+                                        <button
+                                            key={t}
+                                            onClick={() => setChartInterval(t)}
+                                            className={`px-2.5 py-1 text-xs font-medium transition-colors ${t === chartInterval
+                                                ? TC.segmentActive
+                                                : TC.segmentInactive}`}
+                                        >
+                                            {t}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
 
-                            <div className="relative h-[420px] min-h-[420px] w-full p-1 xl:h-[min(56vh,620px)]">
+                            <div className="relative h-[420px] min-h-[420px] w-full p-1 xl:h-auto xl:min-h-0 xl:flex-1">
                                 <div ref={chartContainerRef} className="w-full h-full" />
                                 {chartStatus !== "ready" && (
                                     <div className="pointer-events-none absolute inset-1 flex items-center justify-center">
@@ -2232,8 +2242,8 @@ export default function TradePage() {
                         </ChartPanel>
                     </div>
 
-                    {/* Right Column: Market Microstructure */}
-                    <div className="min-w-0 xl:sticky xl:top-20 xl:self-start">
+                    {/* Book + tape: fills its column instead of stopping short */}
+                    <div className="flex min-h-0 min-w-0 flex-col">
                         <MarketMicrostructurePanel
                             error={marketDetailError}
                             orderBook={orderBook}
@@ -2241,9 +2251,10 @@ export default function TradePage() {
                             tradeTape={tradeTape}
                         />
                     </div>
+                </div>
 
-                    {/* Bottom Workspace: Portfolio and market activity */}
-                    <div className="xl:col-start-2 xl:col-span-2">
+                {/* Activity strip: full width, so nothing is orphaned beside it */}
+                <div className="mt-3">
                         <ActivityPanel>
                             <TerminalWorkspace
                                 activeTab={activeTab}
@@ -2284,6 +2295,24 @@ export default function TradePage() {
                                 positionsNextCursor={positionsNextCursor}
                                 positionsPage={positionsPage}
                                 positionsTotalEntries={positionsTotalEntries}
+                                portfolioSlot={
+                                    <PortfolioPanel
+                                        balancesError={balancesError}
+                                        balancesLoading={balancesLoading}
+                                        balancesUpdatedAt={balancesUpdatedAt}
+                                        baseAsset={baseAsset}
+                                        baseFree={baseFree}
+                                        baseLocked={baseLocked}
+                                        hasExchangeCredential={hasExchangeCredential}
+                                        onRefresh={fetchBalances}
+                                        onSelectSymbol={setSelectedSymbol}
+                                        portfolioRows={visiblePortfolioRows}
+                                        quoteAsset={quoteAsset}
+                                        quoteFree={quoteFree}
+                                        quoteLocked={quoteLocked}
+                                        totalPortfolioValue={totalPortfolioValue}
+                                    />
+                                }
                                 setActiveTab={(tab) => {
                                     setActiveTab(tab);
                                     if (tab === "orders") {
@@ -2314,8 +2343,7 @@ export default function TradePage() {
                                 fetchOrdersPage={fetchOrdersPage}
                                 fetchPositionsPage={fetchPositionsPage}
                             />
-                        </ActivityPanel>
-                    </div>
+                    </ActivityPanel>
                 </div>
             </div>
 
@@ -2467,78 +2495,67 @@ function MobileTerminalNav({ activeTab, onTrade, openOrdersCount, setActiveTab }
     );
 }
 
-function TerminalMetric({ label, value, tone }) {
-    return (
-        <div className="rounded-lg border border-neutral-200 bg-white/70 px-3 py-2 shadow-sm dark:border-white/10 dark:bg-white/[0.03]">
-            <div className={`text-[10px] font-medium uppercase tracking-wide ${TC.text.muted}`}>{label}</div>
-            <div className={`mt-1 truncate font-mono text-sm font-semibold ${tone || TC.text.primary}`}>{value}</div>
-        </div>
-    );
-}
-
-function AccountReadinessPanel({
-    accountLabel,
-    credentialLabel,
+// Single header row: instrument identity, the one number that matters, and
+// status only where it is actionable. Healthy states stay quiet.
+function MarketHeader({
+    baseAsset,
+    quoteAsset,
+    lastPrice,
+    hasPrice,
+    spread,
+    bookReady,
+    openOrderCount,
     hasExchangeCredential,
     balancesError,
     balancesLoading,
-    connectionLabel,
-    connectionTone,
-    lastReplayLabel,
     onRefresh,
 }) {
-    const balanceTone = balancesError ? TC.tone.danger : balancesLoading ? TC.tone.warning : TC.tone.success;
-
     return (
-        <section className="mb-4 grid gap-3 lg:grid-cols-[1.1fr_1fr_1fr]">
-            <ReadinessTile
-                icon={FiShield}
-                label="Session"
-                title={accountLabel}
-                detail={lastReplayLabel}
-                tone={TC.tone.success}
-            />
-            <ReadinessTile
-                icon={hasExchangeCredential ? FiCheck : FiAlertTriangle}
-                label="API key"
-                title={credentialLabel}
-                detail={hasExchangeCredential ? "Scoped to Binance Spot Testnet" : "Trading is disabled until a key is linked"}
-                tone={hasExchangeCredential ? TC.tone.success : TC.tone.warning}
-            />
-            <div className={`${TC.panel} flex items-center justify-between gap-3 px-4 py-3`}>
-                <div className="min-w-0">
-                    <div className={`text-[10px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>Account data</div>
-                    <div className={`mt-1 flex items-center gap-2 text-sm font-semibold ${balanceTone}`}>
-                        {balancesError ? <FiAlertTriangle className="h-4 w-4" /> : balancesLoading ? <FiRefreshCw className="h-4 w-4 animate-spin" /> : <FiActivity className="h-4 w-4" />}
-                        <span className="truncate">{balancesError || (balancesLoading ? "Refreshing balances" : "Balances ready")}</span>
-                    </div>
-                    <div className={`mt-1 text-xs ${connectionTone}`}>{connectionLabel}</div>
-                </div>
+        <header className="mb-4 flex flex-wrap items-baseline gap-x-6 gap-y-3">
+            <div className="flex items-baseline gap-2">
+                <h1 className="text-base font-semibold tracking-tight">
+                    {baseAsset}<span className={TC.text.muted}>/{quoteAsset}</span>
+                </h1>
+                <span className={`text-[10px] font-medium uppercase tracking-wide ${TC.text.muted}`}>Testnet</span>
+            </div>
+
+            <div className="flex items-baseline gap-2">
+                <span className={`font-mono text-2xl font-semibold tabular-nums ${hasPrice ? TC.text.primary : TC.text.muted}`}>
+                    {lastPrice}
+                </span>
+                <span className={`font-mono text-xs tabular-nums ${bookReady ? TC.text.muted : TC.tone.warning}`}>
+                    {spread}
+                </span>
+            </div>
+
+            <div className="ml-auto flex items-center gap-4 text-xs">
+                {openOrderCount > 0 && (
+                    <a href="#activity" className={`font-medium ${TC.text.secondary} hover:underline`}>
+                        {openOrderCount} open
+                    </a>
+                )}
+                {!hasExchangeCredential && (
+                    <span className={`flex items-center gap-1.5 font-medium ${TC.tone.warning}`}>
+                        <FiAlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                        No API key
+                    </span>
+                )}
+                {balancesError && (
+                    <span className={`flex items-center gap-1.5 font-medium ${TC.tone.danger}`}>
+                        <FiAlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                        Balances unavailable
+                    </span>
+                )}
                 <button
                     type="button"
                     onClick={onRefresh}
-                    className={`flex h-9 w-9 items-center justify-center ${TC.iconButton}`}
-                    title="Refresh account state"
+                    className={`flex h-7 w-7 items-center justify-center ${TC.iconButton}`}
+                    aria-label="Refresh account data"
                 >
-                    <FiRefreshCw className="h-4 w-4" />
+                    <FiRefreshCw className={`h-3.5 w-3.5 ${balancesLoading ? "animate-spin" : ""}`} />
                 </button>
             </div>
-        </section>
-    );
-}
-
-function ReadinessTile({ icon: Icon, label, title, detail, tone }) {
-    return (
-        <div className={`${TC.panel} flex items-center gap-3 px-4 py-3`}>
-            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-current/20 ${tone}`}>
-                <Icon className="h-4 w-4" />
-            </div>
-            <div className="min-w-0">
-                <div className={`text-[10px] font-semibold uppercase tracking-wide ${TC.text.muted}`}>{label}</div>
-                <div className="mt-1 truncate text-sm font-semibold">{title}</div>
-                <div className={`mt-0.5 truncate text-xs ${TC.text.muted}`}>{detail}</div>
-            </div>
-        </div>
+        </header>
     );
 }
 
@@ -2546,28 +2563,25 @@ function MarketSwitcher({ favoriteRows, filter, onFilterChange, onSelectSymbol, 
     const displayRows = rows.length ? rows : favoriteRows;
 
     return (
-        <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-                <div className={`flex min-w-[220px] items-center gap-2 px-3 py-2 ${TC.input}`}>
-                    <FiSearch className="h-4 w-4 shrink-0 text-neutral-500" />
-                    <input
-                        className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
-                        value={filter}
-                        onChange={(event) => onFilterChange(event.target.value)}
-                        placeholder="Search BTCUSDT"
-                    />
-                    <FiChevronDown className="h-4 w-4 shrink-0 text-neutral-500" />
-                </div>
-                <button
-                    type="button"
-                    onClick={() => togglePin(selectedSymbol)}
-                    className={`flex h-9 w-9 items-center justify-center ${TC.iconButton} ${pinned.has(selectedSymbol) ? TC.tone.warning : ""}`}
-                    title={pinned.has(selectedSymbol) ? "Remove favorite" : "Favorite market"}
-                >
-                    <FiStar className={pinned.has(selectedSymbol) ? "fill-current" : ""} />
-                </button>
+        <div className="flex min-w-0 items-center gap-2">
+            <div className={`flex w-[132px] shrink-0 items-center gap-1.5 px-2 py-1.5 ${TC.input}`}>
+                <FiSearch className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
+                <input
+                    className="min-w-0 flex-1 bg-transparent text-xs font-medium outline-none"
+                    value={filter}
+                    onChange={(event) => onFilterChange(event.target.value)}
+                    placeholder="Search"
+                />
             </div>
-            <div className="mt-2 flex max-w-[560px] gap-1 overflow-x-auto pb-1 scrollbar-hide">
+            <button
+                type="button"
+                onClick={() => togglePin(selectedSymbol)}
+                className={`flex h-7 w-7 shrink-0 items-center justify-center ${TC.iconButton} ${pinned.has(selectedSymbol) ? TC.tone.warning : ""}`}
+                title={pinned.has(selectedSymbol) ? "Remove favorite" : "Favorite market"}
+            >
+                <FiStar className={`h-3.5 w-3.5 ${pinned.has(selectedSymbol) ? "fill-current" : ""}`} />
+            </button>
+            <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto scrollbar-hide">
                 {displayRows.slice(0, 8).map(([sym, value]) => (
                     <button
                         key={sym}
@@ -2580,9 +2594,7 @@ function MarketSwitcher({ favoriteRows, filter, onFilterChange, onSelectSymbol, 
                     </button>
                 ))}
                 {displayRows.length === 0 && (
-                    <div className={`rounded border border-neutral-200 px-2.5 py-1 text-[11px] dark:border-white/10 ${TC.text.muted}`}>
-                        Waiting for markets · {totalSymbols} tracked
-                    </div>
+                    <div className={`px-1 py-1 text-[11px] ${TC.text.muted}`}>No markets</div>
                 )}
             </div>
         </div>
@@ -2635,18 +2647,8 @@ function OrderTicketContent({
     const submitLabel = isPlacingOrder ? "Submitting..." : `${side === "BUY" ? "Buy" : "Sell"} ${baseAsset}`;
 
     return (
-        <div className="p-4 sm:p-5">
-            <div className="mb-4 flex items-start justify-between gap-3">
-                <div>
-                    <h2 className="text-sm font-semibold tracking-tight">Order ticket</h2>
-                    <div className={`mt-1 text-xs ${TC.text.muted}`}>{selectedSymbol} · Spot Testnet</div>
-                </div>
-                <div className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${side === "BUY" ? TC.side.buyBadge : TC.side.sellBadge}`}>
-                    {side}
-                </div>
-            </div>
-
-            <div className={`mb-4 grid grid-cols-2 gap-1 p-1 ${TC.segment}`}>
+        <div className="p-3">
+            <div className={`mb-3 grid grid-cols-2 gap-1 p-1 ${TC.segment}`}>
                 {["BUY", "SELL"].map((value) => (
                     <button
                         key={value}
@@ -2661,7 +2663,7 @@ function OrderTicketContent({
                 ))}
             </div>
 
-            <div className="mb-4 flex gap-3 overflow-x-auto border-b border-neutral-200 pb-2 dark:border-white/5">
+            <div className="mb-4 flex gap-3 overflow-x-auto scrollbar-hide border-b border-neutral-200 pb-2 whitespace-nowrap dark:border-white/5">
                 {ORDER_TYPE_TABS.map((type) => {
                     const isActive = orderType === type;
                     return (
@@ -3035,8 +3037,8 @@ function TerminalPanel({ id, className = "", children }) {
 
 function OrderTicketPanel({ children }) {
     return (
-        <TerminalPanel id="order-ticket" className="overflow-hidden">
-            {children}
+        <TerminalPanel id="order-ticket" className="flex h-full min-h-0 flex-col overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">{children}</div>
         </TerminalPanel>
     );
 }
@@ -3051,7 +3053,7 @@ function BalancesPanel({ children }) {
 
 function ChartPanel({ children }) {
     return (
-        <TerminalPanel id="price-chart" className="flex flex-col overflow-hidden">
+        <TerminalPanel id="price-chart" className="flex h-full min-h-0 flex-col overflow-hidden">
             {children}
         </TerminalPanel>
     );
@@ -3069,17 +3071,12 @@ function MarketMicrostructurePanel({ error, orderBook, selectedSymbol, tradeTape
     const spread = calculateSpread(orderBook?.bids?.[0]?.[0], orderBook?.asks?.[0]?.[0]);
 
     return (
-        <TerminalPanel id="market-depth" className="flex min-h-[420px] flex-col overflow-hidden xl:h-[min(56vh,620px)]">
-            <div className="flex flex-col gap-3 border-b border-neutral-100 p-4 dark:border-white/5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                    <h3 className="text-sm font-semibold tracking-tight">Order Book & Tape</h3>
-                    <div className={`mt-1 text-xs ${TC.text.muted}`}>
-                        {selectedSymbol} {spread ? `spread ${spread}` : "waiting for depth"}
-                    </div>
-                </div>
-                <div className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${orderBook?.status === "ready" ? TC.tone.success : TC.tone.warning}`}>
-                    {orderBook?.status === "ready" ? "Live depth" : "Loading"}
-                </div>
+        <TerminalPanel id="market-depth" className="flex min-h-[420px] flex-col overflow-hidden xl:h-full xl:min-h-0">
+            <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2.5 dark:border-white/5">
+                <h3 className="text-sm font-semibold tracking-tight">Book &amp; Tape</h3>
+                {orderBook?.status !== "ready" && (
+                    <span className={`text-[11px] font-medium ${TC.tone.warning}`}>Loading</span>
+                )}
             </div>
 
             {error && <div className={`px-4 pt-3 text-xs ${TC.tone.danger}`}>{error}</div>}
@@ -3128,6 +3125,7 @@ function TerminalWorkspace({
     positionsNextCursor,
     positionsPage,
     positionsTotalEntries,
+    portfolioSlot,
     setActiveTab,
     setFilter,
     setOrdersCursor,
@@ -3145,6 +3143,7 @@ function TerminalWorkspace({
         { id: "orders", label: "Orders", icon: FiList },
         { id: "trades", label: "Markets", icon: FiBarChart2 },
         { id: "positions", label: "Positions", icon: FiLayers },
+        { id: "portfolio", label: "Portfolio", icon: FiBriefcase },
     ];
 
     return (
@@ -3219,6 +3218,11 @@ function TerminalWorkspace({
                 )}
             </div>
 
+            {activeTab === "portfolio" ? (
+                <div className="relative flex-1 overflow-hidden">
+                    <div className="absolute inset-0 overflow-auto custom-scrollbar p-4">{portfolioSlot}</div>
+                </div>
+            ) : (
             <div className="relative flex-1 overflow-hidden">
                 <div className="absolute inset-0 overflow-auto custom-scrollbar">
                     <table className="w-full text-left text-sm">
@@ -3285,6 +3289,7 @@ function TerminalWorkspace({
                     </table>
                 </div>
             </div>
+            )}
 
             {(activeTab === "positions" || (activeTab === "orders" && ordersWorkspaceView === "history")) && (
                 <div className="flex items-center justify-between border-t border-neutral-100 p-2 dark:border-white/10">
